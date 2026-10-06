@@ -4,7 +4,11 @@ import pytest
 from sdr.adapters.inbound.http.app import criar_app
 from sdr.adapters.inbound.http.dependencias import Dependencias
 from sdr.application.ports.saude import ResultadoVerificacao
+from sdr.application.use_cases.buscar_imoveis import BuscarImoveis
 from sdr.application.use_cases.verificar_saude import VerificarSaude
+from tests.unit.fakes import BuscaImoveisFake, EmbeddingFake, InterpretadorFake
+
+BUSCAR_IMOVEIS_VAZIO = BuscarImoveis(BuscaImoveisFake(), EmbeddingFake(), InterpretadorFake())
 
 
 class VerificadorFake:
@@ -20,7 +24,12 @@ class VerificadorFake:
     [(True, 200, "ok"), (False, 503, "degradado")],
 )
 async def test_health(ok: bool, status_http: int, status_corpo: str) -> None:
-    app = criar_app(Dependencias(verificar_saude=lambda: VerificarSaude([VerificadorFake(ok)])))
+    app = criar_app(
+        Dependencias(
+            verificar_saude=lambda: VerificarSaude([VerificadorFake(ok)]),
+            buscar_imoveis=lambda: BUSCAR_IMOVEIS_VAZIO,
+        )
+    )
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://teste"

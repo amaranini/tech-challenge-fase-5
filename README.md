@@ -16,7 +16,11 @@ Arquitetura hexagonal — veja [docs/arquitetura.md](docs/arquitetura.md) e
 ```bash
 cp .env.example .env
 docker compose up -d --build --wait
+make seed        # carrega os 60 imóveis fictícios e gera os embeddings
+make busca q="apê 2 quartos zona sul até 800 mil perto do metrô"
 ```
+
+A primeira build baixa o modelo de embeddings (~220 MB) para dentro da imagem.
 
 | Serviço | URL |
 |---|---|
@@ -24,6 +28,16 @@ docker compose up -d --build --wait
 | Health check | http://localhost:8000/health |
 | Web (Streamlit) | http://localhost:8501 |
 | Postgres + pgvector | `localhost:5433` (usuário/senha/db: `sdr`) |
+
+### Busca de imóveis
+
+`POST /imoveis/busca` faz busca híbrida: filtros estruturados (inferidos do texto e/ou
+explícitos em `filtros`) + similaridade semântica. Veja o schema em `/docs` e o
+[ADR 002](docs/adr/002-busca-hibrida-embeddings-locais.md).
+
+```json
+{"texto": "apê 2 quartos zona sul até 800 mil perto do metrô", "filtros": {"aceita_pet": true}, "limite": 5}
+```
 
 A API aplica as migrations (`alembic upgrade head`) ao iniciar.
 

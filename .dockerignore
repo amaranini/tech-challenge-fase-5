@@ -8,3 +8,4 @@
 .import_linter_cache
 tests
 docs
+.cache

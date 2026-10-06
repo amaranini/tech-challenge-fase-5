@@ -14,9 +14,18 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
+# Modelo de embedding embutido na imagem: build reprodutível, sem download no runtime.
+ARG EMBEDDING_MODELO=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+ENV EMBEDDING_MODELO=${EMBEDDING_MODELO} \
+    EMBEDDING_CACHE_DIR=/models \
+    HF_HUB_OFFLINE=1
+RUN HF_HUB_OFFLINE=0 python -c "import os; from fastembed import TextEmbedding; TextEmbedding(os.environ['EMBEDDING_MODELO'], cache_dir='/models')"
+
 COPY src ./src
 COPY migrations ./migrations
 COPY alembic.ini ./
+COPY scripts ./scripts
+COPY data ./data
 RUN uv sync --frozen --no-dev
 
 EXPOSE 8000

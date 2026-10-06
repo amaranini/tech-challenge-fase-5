@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from fastapi import Request
 
+from sdr.application.use_cases.buscar_imoveis import BuscarImoveis
 from sdr.application.use_cases.verificar_saude import VerificarSaude
 
 
@@ -11,6 +12,7 @@ class Dependencias:
     """Fábricas de casos de uso injetadas pelo composition root (bootstrap)."""
 
     verificar_saude: Callable[[], VerificarSaude]
+    buscar_imoveis: Callable[[], BuscarImoveis]
 
 
 def obter_dependencias(request: Request) -> Dependencias:
@@ -20,3 +22,7 @@ def obter_dependencias(request: Request) -> Dependencias:
 
 def obter_verificar_saude(request: Request) -> VerificarSaude:
     return obter_dependencias(request).verificar_saude()
+
+
+def obter_buscar_imoveis(request: Request) -> BuscarImoveis:
+    return obter_dependencias(request).buscar_imoveis()

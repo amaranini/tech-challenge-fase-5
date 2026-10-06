@@ -1,6 +1,6 @@
 # CLAUDE.md — Agente SDR Imobiliário
 
-## Fase atual: Dia 1 — Etapa A (Fundação)
+## Fase atual: Dia 1 — Etapa B (Imóveis + busca híbrida/RAG)
 
 Ao fim de CADA etapa: parar, listar como verificar o critério de aceite e esperar o ok da PO.
 
@@ -29,7 +29,7 @@ src/sdr/
                      ImovelRepository, LeadRepository, ConversaRepository, AgendaPort, CRMPort,
                      CanalMensagemPort (envio de saída; prevê envio de TEMPLATE para mensagens
                      fora da janela de 24h do WhatsApp), AgenteConversacionalPort,
-                     VerificadorSaudePort
+                     VerificadorSaudePort, InterpretadorConsultaPort
     use_cases/       um caso de uso por arquivo (ex.: ProcessarMensagemRecebida, BuscarImoveis)
     dto/             MensagemRecebida normalizada e agnóstica de canal
                      (canal, remetente_id, texto, timestamp, metadados)
@@ -38,7 +38,9 @@ src/sdr/
     outbound/persistence/  SQLAlchemy (async, psycopg 3) + Postgres
     outbound/vector/       pgvector
     outbound/llm/          Anthropic SDK (modelo configurável via env)
-    outbound/embeddings/   modelo local multilíngue (sem API externa)
+    outbound/embeddings/   fastembed (ONNX) local multilíngue — sem API externa (ADR 002)
+    outbound/interpretacao/ texto livre → CriteriosBusca (regras/regex hoje; LLM depois)
+    inbound/cli/     leitura de data/imoveis.json → entidades (usado pelo seed)
     outbound/agent/        LangGraph implementando AgenteConversacionalPort; as tools do grafo
                            chamam PORTS, nunca o banco; prompts versionados em
                            outbound/agent/prompts/
@@ -71,8 +73,8 @@ docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
 
 1. Camadas: `main > bootstrap > (adapters | config) > application > domain`.
 2. Núcleo puro: domain/application não importam fastapi, starlette, pydantic, pydantic_settings,
-   sqlalchemy, psycopg, alembic, streamlit, httpx, uvicorn (adicionar langgraph, anthropic,
-   twilio etc. à lista quando entrarem como dependência).
+   sqlalchemy, psycopg, alembic, streamlit, httpx, uvicorn, fastembed, onnxruntime, numpy,
+   pgvector (adicionar langgraph, anthropic, twilio etc. quando entrarem como dependência).
 3. `adapters.inbound` ⟂ `adapters.outbound`.
 4. `web` não importa `sdr`, sqlalchemy nem psycopg.
 
@@ -82,6 +84,9 @@ docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
 - `make check` — ruff + format check + mypy + lint-imports + pytest.
 - `docker compose up -d --build --wait` — db (pgvector, host:5433), api (:8000), web (:8501).
   A API roda `alembic upgrade head` no start.
+- `make seed` — carrega data/imoveis.json + embeddings (idempotente). Rodar após subir o compose.
+- `make busca q="apê 2 quartos zona sul até 800 mil perto do metrô"` — testa POST /imoveis/busca.
+- Testes de integração usam o banco `sdr_test` (recriado e migrado por sessão); não tocam no seed.
 - Nova migration: `uv run alembic revision -m "descricao"` (arquivos em `migrations/versions/`).
 
 ## Cronograma
@@ -103,5 +108,6 @@ docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
 - Dashboard, WhatsApp/Twilio, Langfuse (Dia 4).
 - Deploy, guardrails/PII, eval (Dia 5).
 - Autenticação da API.
-- Embeddings (Etapa B): intenção de usar **fastembed** (ONNX) com modelo multilíngue
-  (ex.: `paraphrase-multilingual-MiniLM-L12-v2`) para evitar torch na imagem — confirmar na Etapa B.
+- Lead, Conversa, Mensagem, agente LangGraph, LLM Anthropic e chat Streamlit (Etapa C).
+- Full-text/BM25 na busca, reranker e interpretador via LLM (avaliar no eval do Dia 5).
+- Endpoint de cadastro/edição de imóveis (carga só via `scripts/seed_imoveis.py`).

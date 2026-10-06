@@ -3,16 +3,17 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import create_engine, pool
 
+from sdr.adapters.outbound.persistence.modelos import Base
 from sdr.config.settings import obter_settings
 
 config = context.config
-if config.config_file_name is not None:
+if config.config_file_name is not None and config.attributes.get("configurar_logging", True):
     fileConfig(config.config_file_name)
 
-# Metadata dos modelos ORM entra aqui quando houver tabelas (Etapa B).
-target_metadata = None
+target_metadata = Base.metadata
 
-DATABASE_URL = obter_settings().database_url
+# Testes podem apontar para outro banco via config.attributes["database_url"].
+DATABASE_URL: str = config.attributes.get("database_url") or obter_settings().database_url
 
 
 def run_migrations_offline() -> None:

@@ -24,6 +24,8 @@ services:
         required: false
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-sdr}:${POSTGRES_PASSWORD:-sdr}@db:5432/${POSTGRES_DB:-sdr}
+      EMBEDDING_CACHE_DIR: /models
+      EMBEDDING_CARREGAR_NO_INICIO: "true"
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:

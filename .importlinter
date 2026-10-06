@@ -35,6 +35,10 @@ forbidden_modules =
     streamlit
     httpx
     uvicorn
+    fastembed
+    onnxruntime
+    numpy
+    pgvector
 
 # 3. Adapters de entrada e de saída não se conhecem; só o bootstrap os conecta.
 [importlinter:contract:adapters-independentes]

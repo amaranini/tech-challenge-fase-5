@@ -54,6 +54,7 @@ flowchart TB
 
     subgraph outbound[adapters/outbound]
         persistence[persistence<br/>SQLAlchemy]
+        interp[interpretacao<br/>regras → CriteriosBusca]
         vector[vector<br/>pgvector]
         llm[llm<br/>Anthropic SDK]
         emb[embeddings<br/>modelo local]
@@ -77,6 +78,7 @@ flowchart TB
     llm -. implementa .-> ports
     emb -. implementa .-> ports
     agent -. implementa .-> ports
+    interp -. implementa .-> ports
     agent -- tools chamam --> ports
     persistence --> pg
     vector --> pg
@@ -131,7 +133,37 @@ O mesmo desenho vale para os próximos fluxos: o router só traduz HTTP ↔ caso
 mensagem de um lead, venha do chat web ou do WhatsApp, vira um `MensagemRecebida` e entra no
 mesmo `ProcessarMensagemRecebida`.
 
-## 4. Implantação local
+## 4. Busca híbrida de imóveis (`POST /imoveis/busca`)
+
+```mermaid
+sequenceDiagram
+    participant C as Cliente
+    participant R as router imoveis (inbound)
+    participant U as BuscarImoveis (use case)
+    participant I as InterpretadorRegras
+    participant E as EmbeddingFastembed
+    participant B as BuscaImoveisPgvector
+    participant DB as Postgres + pgvector
+
+    C->>R: {"texto": "apê 2 quartos zona sul até 800 mil perto do metrô", "filtros": {...}}
+    R->>U: ConsultaImoveis(texto, criterios explícitos, limite)
+    U->>I: interpretar(texto) via InterpretadorConsultaPort
+    I-->>U: CriteriosBusca inferidos (apartamento, sul, ≤800k, ≥2q, metrô ≤1000m)
+    Note over U: inferidos.sobrescrever_com(explícitos)
+    U->>E: gerar_consulta(texto) via EmbeddingPort
+    E-->>U: vetor[384]
+    U->>B: buscar(criterios, vetor, limite) via BuscaImoveisPort
+    B->>DB: SELECT … WHERE filtros ORDER BY embedding <=> vetor LIMIT k
+    DB-->>B: linhas + distância
+    B-->>U: ImovelEncontrado[] (imóvel + similaridade)
+    U-->>R: ResultadoBusca(criterios_aplicados, imoveis)
+    R-->>C: 200 {criterios_aplicados, total, resultados}
+```
+
+Carga: `scripts/seed_imoveis.py` → `CadastrarImoveis` → `ImovelRepository.salvar_todos`
+(upsert) → `EmbeddingPort.gerar_documentos(texto_semantico)` → `BuscaImoveisPort.indexar`.
+
+## 5. Implantação local
 
 ```mermaid
 flowchart LR
