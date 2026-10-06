@@ -24,8 +24,6 @@ RUN HF_HUB_OFFLINE=0 python -c "import os; from fastembed import TextEmbedding; 
 COPY src ./src
 COPY migrations ./migrations
 COPY alembic.ini ./
-COPY scripts ./scripts
-COPY data ./data
 RUN uv sync --frozen --no-dev
 
 EXPOSE 8000

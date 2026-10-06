@@ -4,26 +4,68 @@ root_packages =
     web
 include_external_packages = True
 
-# 1. Regra de dependência do hexágono: cada camada só importa as de baixo.
-#    `config` e `adapters` são independentes entre si: quem lê a config e repassa
-#    valores aos adapters é o composition root (bootstrap).
-[importlinter:contract:camadas]
-name = Camadas hexagonais (domain <- application <- adapters <- bootstrap)
+# 1. Camadas globais. `verticals` e `config` não se conhecem: a vertical tem config própria
+#    e o bootstrap é quem escolhe e monta a vertical ativa.
+[importlinter:contract:camadas-globais]
+name = Camadas globais (core <- verticals <- bootstrap <- main/cli)
 type = layers
 layers =
-    sdr.main
+    sdr.main | sdr.cli
     sdr.bootstrap
-    sdr.adapters | sdr.config
-    sdr.application
-    sdr.domain
+    sdr.verticals | sdr.config
+    sdr.core
 
-# 2. O núcleo (domain + application) não conhece frameworks nem infraestrutura.
-[importlinter:contract:nucleo-puro]
-name = Núcleo não importa frameworks/infra
+# 2. O core é genérico: nunca conhece uma vertical.
+[importlinter:contract:core-agnostico]
+name = Core não importa verticals
 type = forbidden
 source_modules =
-    sdr.domain
-    sdr.application
+    sdr.core
+forbidden_modules =
+    sdr.verticals
+
+# 3. Hexágono do core: cada camada só importa as de baixo.
+#    `vertical` (contrato VerticalPack) fica no topo porque referencia infra (FastAPI, sessões).
+[importlinter:contract:camadas-core]
+name = Hexágono do core (domain <- application <- adapters <- vertical)
+type = layers
+containers =
+    sdr.core
+layers =
+    vertical
+    adapters
+    application
+    domain
+
+# 4. Hexágono de cada fatia da vertical + pack no topo da vertical.
+[importlinter:contract:camadas-vertical-imobiliario]
+name = Vertical imobiliária (pack <- config | catalogo)
+type = layers
+containers =
+    sdr.verticals.imobiliario
+layers =
+    pack
+    config | catalogo
+
+[importlinter:contract:camadas-fatias-imobiliario]
+name = Hexágono das fatias da vertical imobiliária (domain <- application <- adapters)
+type = layers
+containers =
+    sdr.verticals.imobiliario.catalogo
+layers =
+    adapters
+    application
+    domain
+
+# 5. Núcleos puros (domain + application do core e das fatias): sem frameworks/infra.
+[importlinter:contract:nucleo-puro]
+name = Núcleos não importam frameworks/infra
+type = forbidden
+source_modules =
+    sdr.core.domain
+    sdr.core.application
+    sdr.verticals.imobiliario.catalogo.domain
+    sdr.verticals.imobiliario.catalogo.application
 forbidden_modules =
     fastapi
     starlette
@@ -40,15 +82,15 @@ forbidden_modules =
     numpy
     pgvector
 
-# 3. Adapters de entrada e de saída não se conhecem; só o bootstrap os conecta.
+# 6. Adapters de entrada e de saída do core não se conhecem.
 [importlinter:contract:adapters-independentes]
-name = Adapters inbound e outbound são independentes
+name = Adapters inbound e outbound do core são independentes
 type = independence
 modules =
-    sdr.adapters.inbound
-    sdr.adapters.outbound
+    sdr.core.adapters.inbound
+    sdr.core.adapters.outbound
 
-# 4. O front Streamlit fala com o backend SOMENTE via HTTP.
+# 7. O front Streamlit fala com o backend SOMENTE via HTTP.
 [importlinter:contract:web-isolado]
 name = web não importa o backend
 type = forbidden

@@ -1,10 +1,11 @@
-# Agente SDR Imobiliário — Tech Challenge FIAP Fase 5
+# Agente SDR Conversacional (vertical imobiliária) — Tech Challenge FIAP Fase 5
 
 Agente de pré-vendas (SDR) imobiliário com IA generativa: a **Lia** atende leads, entende o que
 procuram, sugere imóveis reais da base e encaminha para um corretor.
 
-Arquitetura hexagonal — veja [docs/arquitetura.md](docs/arquitetura.md) e
-[docs/adr/](docs/adr/).
+Core de SDR genérico + verticais de negócio (hoje: imobiliária), ambos hexagonais — veja
+[docs/arquitetura.md](docs/arquitetura.md) e [docs/adr/](docs/adr/). A vertical ativa é
+escolhida por `VERTICAL` no `.env`.
 
 ## Pré-requisitos
 
@@ -16,7 +17,7 @@ Arquitetura hexagonal — veja [docs/arquitetura.md](docs/arquitetura.md) e
 ```bash
 cp .env.example .env
 docker compose up -d --build --wait
-make seed        # carrega os 60 imóveis fictícios e gera os embeddings
+make seed        # carrega o catálogo da vertical (60 imóveis fictícios) + embeddings
 make busca q="apê 2 quartos zona sul até 800 mil perto do metrô"
 ```
 

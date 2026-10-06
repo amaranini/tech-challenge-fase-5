@@ -35,7 +35,7 @@ migrate:
 	uv run alembic upgrade head
 
 seed:
-	docker compose exec api python scripts/seed_imoveis.py
+	docker compose exec api python -m sdr.cli seed
 
 q ?= apê 2 quartos zona sul até 800 mil perto do metrô
 busca:

@@ -3,8 +3,9 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import create_engine, pool
 
-from sdr.adapters.outbound.persistence.modelos import Base
+from sdr.bootstrap import VERTICAIS  # noqa: F401 — importa os modelos ORM de todas as verticais
 from sdr.config.settings import obter_settings
+from sdr.core.adapters.outbound.persistence.base import Base
 
 config = context.config
 if config.config_file_name is not None and config.attributes.get("configurar_logging", True):

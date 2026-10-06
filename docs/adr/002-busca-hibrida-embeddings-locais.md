@@ -3,6 +3,11 @@
 - **Status:** Aceita
 - **Data:** 2026-10-06
 
+> **Nota (ADR 003):** com a separação core × vertical, `BuscaImoveisPort` passou a se chamar
+> `IndiceImoveisPort` (interno da vertical imobiliária), a fronteira genérica virou o
+> `CatalogoPort` do core e a carga passou a ser `python -m sdr.cli seed`. As decisões
+> abaixo continuam válidas.
+
 ## Contexto
 
 A Lia só pode sugerir imóveis que existem na base. O lead pede coisas como

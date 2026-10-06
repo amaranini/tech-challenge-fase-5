@@ -9,8 +9,8 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from sdr.adapters.outbound.persistence.database import criar_engine, criar_fabrica_sessao
 from sdr.config.settings import obter_settings
+from sdr.core.adapters.outbound.persistence.database import criar_engine, criar_fabrica_sessao
 
 RAIZ = Path(__file__).resolve().parents[2]
 BANCO_TESTE = "sdr_test"
