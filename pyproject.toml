@@ -1,0 +1,68 @@
+[project]
+name = "sdr-imobiliario"
+version = "0.1.0"
+description = "Agente SDR imobiliário com IA generativa (Tech Challenge FIAP — Fase 5)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "psycopg[binary]>=3.2",
+    "alembic>=1.14",
+]
+
+[dependency-groups]
+web = [
+    "streamlit>=1.40",
+    "httpx>=0.28",
+]
+dev = [
+    { include-group = "web" },
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.28",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "import-linter>=2.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sdr"]
+
+# ---------------------------------------------------------------- ruff
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "web"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "ASYNC", "N", "PL", "PT"]
+ignore = ["PLR0913", "RUF001", "RUF002", "RUF003"]  # RUF00x: acentos em pt-BR são intencionais
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PLR2004"]
+"migrations/**" = ["N999"]
+
+# ---------------------------------------------------------------- mypy
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+packages = ["sdr", "web"]
+plugins = ["pydantic.mypy"]
+
+# ---------------------------------------------------------------- pytest
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: requer Postgres rodando (docker compose up db)",
+]

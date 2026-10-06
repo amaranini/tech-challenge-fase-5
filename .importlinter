@@ -1,0 +1,56 @@
+[importlinter]
+root_packages =
+    sdr
+    web
+include_external_packages = True
+
+# 1. Regra de dependência do hexágono: cada camada só importa as de baixo.
+#    `config` e `adapters` são independentes entre si: quem lê a config e repassa
+#    valores aos adapters é o composition root (bootstrap).
+[importlinter:contract:camadas]
+name = Camadas hexagonais (domain <- application <- adapters <- bootstrap)
+type = layers
+layers =
+    sdr.main
+    sdr.bootstrap
+    sdr.adapters | sdr.config
+    sdr.application
+    sdr.domain
+
+# 2. O núcleo (domain + application) não conhece frameworks nem infraestrutura.
+[importlinter:contract:nucleo-puro]
+name = Núcleo não importa frameworks/infra
+type = forbidden
+source_modules =
+    sdr.domain
+    sdr.application
+forbidden_modules =
+    fastapi
+    starlette
+    pydantic
+    pydantic_settings
+    sqlalchemy
+    psycopg
+    alembic
+    streamlit
+    httpx
+    uvicorn
+
+# 3. Adapters de entrada e de saída não se conhecem; só o bootstrap os conecta.
+[importlinter:contract:adapters-independentes]
+name = Adapters inbound e outbound são independentes
+type = independence
+modules =
+    sdr.adapters.inbound
+    sdr.adapters.outbound
+
+# 4. O front Streamlit fala com o backend SOMENTE via HTTP.
+[importlinter:contract:web-isolado]
+name = web não importa o backend
+type = forbidden
+source_modules =
+    web
+forbidden_modules =
+    sdr
+    sqlalchemy
+    psycopg
