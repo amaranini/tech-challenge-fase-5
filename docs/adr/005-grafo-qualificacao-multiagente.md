@@ -54,11 +54,17 @@ intenções nem os campos.
 6. **Cada nó tem seu modelo:** `LLM_MODEL_ROUTER`, `LLM_MODEL_EXTRACTION` e
    `LLM_MODEL_AGENT`, com `LLM_MODELO` como padrão. Roteador e extração rodam com
    temperatura 0.
-7. **Slot filling humanizado.** Um bloco interno de estado entregue ao especialista
+7. **Quando sugerir itens do catálogo** (acrescentado na Etapa B). A
+   `IntencaoVertical` declara `campos_para_sugerir`. Com esses campos preenchidos, o bloco
+   de estado manda o especialista buscar e apresentar até 3 opções antes da pergunta.
+   **Depois de qualificado**, o bloco para de pedir campos, e a única pergunta conduz à
+   `proxima_acao`. Nos testes com LLM real, a instrução só no prompt da vertical não
+   bastava: a orientação de "uma pergunta sobre o próximo dado" prevalecia.
+8. **Slot filling humanizado.** Um bloco interno de estado entregue ao especialista
    informa o próximo campo, com descrição, e a instrução de no máximo uma pergunta,
    aproveitando o que o lead já disse e respondendo antes às dúvidas dele. Os demais
    campos faltantes vão como contexto, para não serem perguntados agora.
-8. **Eventos de domínio** são gravados em `lead_eventos` (tipo, payload JSONB, timestamp):
+9. **Eventos de domínio** são gravados em `lead_eventos` (tipo, payload JSONB, timestamp):
    - os do pedido: `LeadCriado`, `IntencaoIdentificada`, `IntencaoAlterada`,
      `CampoQualificacaoPreenchido`, `ScoreAlterado`, `LeadQualificado`;
    - dois acrescentados: `CampoQualificacaoCorrigido` e `CampoQualificacaoRemovido`.

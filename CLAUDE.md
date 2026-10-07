@@ -1,8 +1,42 @@
 # CLAUDE.md — Agente SDR Conversacional (vertical ativa: imobiliário)
 
-## Fase atual: Dia 2 — Etapa A
+## Fase atual: Dia 2 — Etapa C
 
 Ao fim de CADA etapa: parar, listar como verificar o critério de aceite e esperar o ok da PO.
+Commits só com ok da PO, um por etapa, na branch `dia-2` (nunca direto na `main`).
+
+### Próxima etapa: Dia 2 — Etapa C (Exposição e verificação) — especificação da PO
+- `GET /leads/{id}` (id = `lead_id` público do canal web, como nas demais rotas): intenção,
+  ficha, campos_faltantes, score, classificação, score_motivos, proxima_acao e eventos.
+  `campos_faltantes` não é persistido: calcular com `campos_faltantes(ficha, prioridade)`
+  usando a `IntencaoVertical` da intenção atual (VerticalMontada.intencoes) — no core, sem
+  conhecer imóvel (caso de uso genérico, ex.: `ObterLead`).
+- Streamlit: painel lateral AO LADO do chat mostrando em tempo real intenção, ficha sendo
+  preenchida, score com motivos e próxima ação — consumindo SÓ a API (dentro do mesmo
+  `st.fragment(run_every=...)` do polling, ou outro fragment).
+- Testes de cenário com LLM real marcados `@pytest.mark.llm` (fora da suíte padrão: incluir
+  em `addopts` junto com e2e), roteirizando contra a API no ar (reaproveitar `postar` /
+  `aguardar_resposta` de tests/e2e/test_conversa_lia.py):
+  1. "Estou procurando apartamento na zona sul" → qualifica compra até
+     proxima_acao = agendar_visita
+  2. "Quero investir em imóveis para renda" → qualifica investimento até
+     proxima_acao = encaminhar_especialista
+  3. troca de intenção de aluguel para compra no meio da conversa (IntencaoAlterada,
+     ficha de aluguel preservada, regiao/quartos herdados)
+  Salvar os roteiros em `evals/cenarios/` (YAML ou JSON: falas do lead + expectativas),
+  pois serão reaproveitados no eval do Dia 5; o teste lê os roteiros desses arquivos.
+  Asserts robustos a variação do LLM (estado final via GET /leads/{id}, não texto exato).
+- Aceite do dia: Exemplos 1 e 2 rodam ponta a ponta no chat com ficha, score e próxima
+  ação aparecendo no painel; lint-imports, ruff, mypy e pytest passam; `pytest -m llm`
+  passa nos 3 cenários.
+- Roteiros que já qualificaram com LLM real na Etapa B (bons pontos de partida):
+  compra: "Estou procurando apartamento na zona sul" / "Quero comprar" / "Até uns 800 mil" /
+  "2 quartos" / "Quero me mudar nos próximos 2 meses" / "Vou financiar e usar meu FGTS".
+  investimento: "Quero investir em imóveis para renda" / "Tenho uns 500 mil pra investir" /
+  "Algo em torno de 6% ao ano" / "Penso no longo prazo, mais de 5 anos" /
+  "Seria meu primeiro investimento em imóvel".
+  Cada fala precisa esperar a resposta (debounce de 5s) antes da próxima.
+- NÃO implementar: agendamento, resumo para corretor, follow-up, dashboard, WhatsApp.
 
 ## Visão do projeto
 
@@ -79,9 +113,11 @@ src/sdr/
                            definição da tool buscar_imoveis, rotas /imoveis, carga do JSON
       persona/             Lia: lia.py + prompts/<versao>.md (IMOBILIARIO_VERSAO_PROMPT),
                            prompts/descoberta_v1.md, prompts/especialistas/<intencao>_v1.md
-      qualificacao/        domain/regras.py (scoring + critério de qualificado, puro);
-                           adapters/fichas.py (Pydantic por intenção), schema_pydantic.py
-                           (SchemaFicha sobre Pydantic), intencoes.py (IntencaoVertical)
+      qualificacao/        domain/regras.py (CAMPOS/ESSENCIAIS por intenção, scoring com
+                           score_motivos, critério de qualificado — puro); adapters/fichas.py
+                           (Pydantic por intenção), schema_pydantic.py (SchemaFicha sobre
+                           Pydantic), intencoes.py (compra/aluguel/investimento) — regras de
+                           negócio em docs/qualificacao-imobiliaria.md
   config/                  pydantic-settings GENÉRICO (inclui VERTICAL=imobiliario)
   bootstrap.py             composition root — instancia a infra do core, escolhe a vertical
                            pelo registro VERTICAIS e chama pack.montar(infra)
@@ -142,6 +178,8 @@ docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
     `Qualificacao` do domínio; nós do grafo só orquestram. Scoring/critério são da vertical.
   - Merge: nulo nunca apaga; campo preenchido só muda com correção explícita e só some com
     remoção explícita. Especialista faz no máximo UMA pergunta (próximo campo por prioridade).
+  - `IntencaoVertical.campos_para_sugerir`: preenchidos ⇒ o especialista busca no catálogo.
+    Qualificado ⇒ não pergunta mais dados; a única pergunta conduz à `proxima_acao`.
   - Toda mudança relevante vira evento em `lead_eventos`.
 - **Gerais**
   - Toda config e chave via `.env` (commitar `.env.example`; nunca segredos).

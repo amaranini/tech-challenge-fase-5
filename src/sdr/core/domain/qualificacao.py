@@ -65,6 +65,8 @@ class IntencaoVertical:
     prioridade_campos: tuple[str, ...]  # ordem do slot filling
     prompt_especialista: str
     proxima_acao_ao_qualificar: str
+    # Campos que, preenchidos, já permitem sugerir itens do catálogo (vazio = não sugere).
+    campos_para_sugerir: tuple[str, ...] = ()
 
 
 def _vazio(valor: object) -> bool:

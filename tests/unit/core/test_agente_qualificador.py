@@ -237,3 +237,48 @@ async def test_teto_de_passos_forca_texto() -> None:
     resposta = await cenario.grafo.responder(entrada(LEAD))
     assert resposta.texto == "pronto"
     assert [forcar for _, _, forcar in cenario.agente.chamadas] == [False, False, True]
+
+
+def _bloco(cenario: Cenario) -> str:
+    return next(
+        m.conteudo for m in cenario.agente.chamadas[0][0] if "Estado da qualificação" in m.conteudo
+    )
+
+
+async def test_com_campos_para_sugerir_preenchidos_orienta_buscar_no_catalogo() -> None:
+    cenario = Cenario(
+        roteador=[{"intencao": "plano", "confianca": 0.9}],
+        extracao=[extracao({"unidade": "Centro"})],
+    )
+    await cenario.grafo.responder(entrada(LEAD, "no Centro"))
+    assert "chame a ferramenta de busca AGORA" in _bloco(cenario)
+
+
+async def test_sem_campos_para_sugerir_nao_orienta_busca() -> None:
+    cenario = Cenario(
+        roteador=[{"intencao": "plano", "confianca": 0.9}],
+        extracao=[extracao({"horario": "noite"})],
+    )
+    await cenario.grafo.responder(entrada(LEAD, "à noite"))
+    assert "ferramenta de busca" not in _bloco(cenario)
+
+
+async def test_qualificado_nao_pergunta_mais_dados_so_conduz_a_proxima_acao() -> None:
+    lead = replace(
+        LEAD,
+        qualificacao=Qualificacao(
+            LEAD.id,
+            intencao_atual="plano",
+            fichas={"plano": {"unidade": "Centro", "orcamento": 150}},
+        ),
+    )
+    cenario = Cenario(
+        roteador=[{"intencao": "plano", "confianca": 0.9}],
+        extracao=[extracao({"modalidades": ["yoga"]})],  # 3 campos → qualifica; falta horario
+    )
+
+    await cenario.grafo.responder(entrada(lead, "yoga"))
+
+    bloco = _bloco(cenario)
+    assert "Sua ÚNICA pergunta nesta mensagem deve conduzir a essa ação" in bloco
+    assert "Próximo dado a descobrir" not in bloco

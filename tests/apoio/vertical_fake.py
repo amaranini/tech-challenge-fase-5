@@ -57,6 +57,7 @@ PLANO = IntencaoVertical(
     prioridade_campos=("orcamento", "unidade", "horario"),
     prompt_especialista="PROMPT_PLANO",
     proxima_acao_ao_qualificar="agendar_aula",
+    campos_para_sugerir=("unidade",),
 )
 AVULSO = IntencaoVertical(
     nome="avulso",

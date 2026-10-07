@@ -9,6 +9,12 @@ from sdr.verticals.imobiliario.qualificacao.adapters.fichas import (
     FichaInvestimento,
 )
 from sdr.verticals.imobiliario.qualificacao.adapters.schema_pydantic import SchemaPydantic
+from sdr.verticals.imobiliario.qualificacao.domain.regras import (
+    ALUGUEL,
+    CAMPOS,
+    COMPRA,
+    INVESTIMENTO,
+)
 
 AGENDAR_VISITA = "agendar_visita"
 ENCAMINHAR_ESPECIALISTA = "encaminhar_especialista"
@@ -17,27 +23,31 @@ ENCAMINHAR_ESPECIALISTA = "encaminhar_especialista"
 def definir_intencoes(prompts_especialistas: Mapping[str, str]) -> list[IntencaoVertical]:
     return [
         IntencaoVertical(
-            nome="compra",
-            descricao="quer COMPRAR um imóvel para morar (ou para a família).",
+            nome=COMPRA,
+            descricao="quer COMPRAR um imóvel para morar (ele ou a família).",
             schema=SchemaPydantic(FichaCompra),
-            prioridade_campos=(),
-            prompt_especialista=prompts_especialistas["compra"],
+            prioridade_campos=CAMPOS[COMPRA],
+            prompt_especialista=prompts_especialistas[COMPRA],
             proxima_acao_ao_qualificar=AGENDAR_VISITA,
+            campos_para_sugerir=("regiao", "preco_max"),
         ),
         IntencaoVertical(
-            nome="aluguel",
+            nome=ALUGUEL,
             descricao="quer ALUGAR um imóvel para morar.",
             schema=SchemaPydantic(FichaAluguel),
-            prioridade_campos=(),
-            prompt_especialista=prompts_especialistas["aluguel"],
+            prioridade_campos=CAMPOS[ALUGUEL],
+            prompt_especialista=prompts_especialistas[ALUGUEL],
             proxima_acao_ao_qualificar=AGENDAR_VISITA,
+            campos_para_sugerir=("regiao", "aluguel_max"),
         ),
         IntencaoVertical(
-            nome="investimento",
-            descricao="quer comprar imóvel como INVESTIMENTO (renda de aluguel ou valorização).",
+            nome=INVESTIMENTO,
+            descricao="quer comprar imóvel como INVESTIMENTO (renda de aluguel ou "
+            "valorização), não para morar.",
             schema=SchemaPydantic(FichaInvestimento),
-            prioridade_campos=(),
-            prompt_especialista=prompts_especialistas["investimento"],
+            prioridade_campos=CAMPOS[INVESTIMENTO],
+            prompt_especialista=prompts_especialistas[INVESTIMENTO],
             proxima_acao_ao_qualificar=ENCAMINHAR_ESPECIALISTA,
+            campos_para_sugerir=("ticket", "objetivo"),
         ),
     ]

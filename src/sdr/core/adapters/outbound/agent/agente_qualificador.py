@@ -433,7 +433,26 @@ class AgenteQualificador:
             f"Intenção: {intencao.nome}",
             f"Ficha atual: {json.dumps(dict(q.ficha), ensure_ascii=False, default=str)}",
         ]
-        if faltantes:
+        if q.score:
+            linhas.append(f"Score: {q.score.pontos} ({q.score.classificacao.value})")
+        pode_sugerir = bool(intencao.campos_para_sugerir) and not campos_faltantes(
+            q.ficha, intencao.campos_para_sugerir
+        )
+        if pode_sugerir:
+            linhas.append(
+                "Já há dados suficientes para sugerir opções do catálogo: se você ainda não "
+                "apresentou opções que atendem à ficha atual, chame a ferramenta de busca "
+                "AGORA, antes de responder, e apresente até 3. Mesmo mostrando opções, termine "
+                "com UMA única pergunta."
+            )
+        if q.proxima_acao:
+            # Qualificado: o objetivo vira a próxima ação; não se pergunta mais nada da ficha.
+            linhas.append(
+                f"Lead QUALIFICADO. Próxima ação: {q.proxima_acao}. Sua ÚNICA pergunta nesta "
+                "mensagem deve conduzir a essa ação, sem combinar data ou horário (isso é "
+                "feito depois). Não pergunte outros dados de qualificação."
+            )
+        elif faltantes:
             linhas += [
                 f"Próximo dado a descobrir: {_descricao_campo(intencao, faltantes[0])}.",
                 "Faça NO MÁXIMO UMA pergunta, sobre esse dado, de forma natural e aproveitando "
@@ -446,13 +465,6 @@ class AgenteQualificador:
                 )
         else:
             linhas.append("Ficha completa: não pergunte mais dados de qualificação.")
-        if q.score:
-            linhas.append(f"Score: {q.score.pontos} ({q.score.classificacao.value})")
-        if q.proxima_acao:
-            linhas.append(
-                f"Lead QUALIFICADO. Próxima ação: {q.proxima_acao}. Conduza a conversa para "
-                "essa ação, sem combinar data ou horário (isso é feito depois)."
-            )
         return "\n".join(linhas)
 
     # ------------------------------------------------------------------ ferramentas
