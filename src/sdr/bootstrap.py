@@ -15,12 +15,17 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from sdr.config.settings import Settings, obter_settings
 from sdr.core.adapters.inbound.http.app import criar_app
 from sdr.core.adapters.inbound.http.dependencias import Dependencias
-from sdr.core.adapters.outbound.agent.agente_langgraph import AgenteLangGraph
+from sdr.core.adapters.outbound.agent.agente_qualificador import (
+    AgenteQualificador,
+    ConfigQualificacao,
+    LLMsPorNo,
+)
 from sdr.core.adapters.outbound.embeddings.fastembed_adapter import EmbeddingFastembed
 from sdr.core.adapters.outbound.llm.openai_adapter import LLMOpenAI
 from sdr.core.adapters.outbound.persistence.database import criar_engine, criar_fabrica_sessao
 from sdr.core.adapters.outbound.persistence.repositorios_conversa_sql import (
     ConversaRepositorySql,
+    LeadEventoRepositorySql,
     LeadRepositorySql,
 )
 from sdr.core.adapters.outbound.persistence.verificador_saude_postgres import (
@@ -39,18 +44,18 @@ VERTICAIS: dict[str, Callable[[], VerticalPack]] = {
 }
 
 
-def _llm_openai(settings: Settings) -> LLMPort:
+def _llm_openai(settings: Settings, modelo: str) -> LLMPort:
     chave = settings.openai_api_key.get_secret_value() if settings.openai_api_key else None
     return LLMOpenAI(
         api_key=chave or None,
-        modelo=settings.llm_modelo,
+        modelo=modelo,
         temperatura=settings.llm_temperatura,
         timeout_s=settings.llm_timeout_s,
     )
 
 
 # Provedores de LLM disponíveis; o ativo vem de LLM_PROVIDER no .env.
-PROVEDORES_LLM: dict[str, Callable[[Settings], LLMPort]] = {
+PROVEDORES_LLM: dict[str, Callable[[Settings, str], LLMPort]] = {
     "openai": _llm_openai,
 }
 
@@ -61,6 +66,7 @@ class Container:
     embedding: EmbeddingFastembed
     verificar_saude: VerificarSaude
     vertical: VerticalMontada
+    eventos: LeadEventoRepositorySql
     processar_mensagem: ProcessarMensagemRecebida
     obter_historico: ObterHistorico
     listar_leads: ListarLeads
@@ -94,10 +100,23 @@ def montar_container(settings: Settings | None = None) -> Container:
     vertical = criar_pack().montar(InfraCompartilhada(sessoes=sessoes, embedding=embedding))
 
     leads, conversas = LeadRepositorySql(sessoes), ConversaRepositorySql(sessoes)
-    agente = AgenteLangGraph(
-        criar_llm(settings),
+    eventos = LeadEventoRepositorySql(sessoes)
+    llms = LLMsPorNo(
+        roteador=criar_llm(settings, settings.llm_model_router or settings.llm_modelo),
+        extracao=criar_llm(settings, settings.llm_model_extraction or settings.llm_modelo),
+        agente=criar_llm(settings, settings.llm_model_agent or settings.llm_modelo),
+    )
+    agente = AgenteQualificador(
+        llms,
         vertical.persona,
-        vertical.ferramentas,
+        ConfigQualificacao(
+            intencoes=vertical.intencoes,
+            regras=vertical.regras_qualificacao,
+            prompt_descoberta=vertical.prompt_descoberta,
+            limiar_confianca=settings.router_confianca_min,
+            janela_extracao=settings.extracao_janela_mensagens,
+        ),
+        ferramentas=vertical.ferramentas,
         max_passos=settings.agente_max_passos,
     )
 
@@ -106,11 +125,13 @@ def montar_container(settings: Settings | None = None) -> Container:
         embedding=embedding,
         verificar_saude=VerificarSaude([VerificadorSaudePostgres(engine)]),
         vertical=vertical,
+        eventos=eventos,
         processar_mensagem=ProcessarMensagemRecebida(
             leads,
             conversas,
             agente,
             vertical.catalogo,
+            eventos=eventos,
             persona=vertical.persona,
             janela_historico=settings.conversa_janela_historico,
         ),

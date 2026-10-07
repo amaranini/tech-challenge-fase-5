@@ -2,8 +2,9 @@
 
 O core define O QUE uma vertical precisa entregar; a vertical decide COMO.
 Hoje o contrato tem só o necessário: catálogo, rotas, carga inicial, persona (prompt
-versionado) e ferramentas do agente. Entram quando forem usados: intenções, validador da
-ficha de qualificação, scoring e especialistas (Dia 2); cadência de follow-up (Dia 3).
+versionado), ferramentas do agente e qualificação (intenções com schema, prioridade de
+campos e prompt do especialista; regras de scoring e critério de qualificado; prompt de
+descoberta). Entra quando for usado: cadência de follow-up (Dia 3).
 """
 
 from collections.abc import Awaitable, Callable, Sequence
@@ -17,6 +18,7 @@ from sdr.core.application.ports.catalogo import CatalogoPort
 from sdr.core.application.ports.embedding import EmbeddingPort
 from sdr.core.application.ports.ferramenta import Ferramenta
 from sdr.core.domain.agente import Persona
+from sdr.core.domain.qualificacao import IntencaoVertical, RegrasQualificacao
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,9 @@ class VerticalMontada:
     catalogo: CatalogoPort
     carregar_catalogo_inicial: Callable[[], Awaitable[int]]
     persona: Persona
+    intencoes: Sequence[IntencaoVertical]  # "indefinida" é do core, nunca da vertical
+    regras_qualificacao: RegrasQualificacao
+    prompt_descoberta: str  # conduz a conversa até identificar a intenção
     ferramentas: Sequence[Ferramenta] = field(default_factory=tuple)  # tools do agente
     routers: Sequence[APIRouter] = field(default_factory=tuple)
 

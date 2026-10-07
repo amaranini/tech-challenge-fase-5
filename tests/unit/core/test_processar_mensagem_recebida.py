@@ -8,10 +8,13 @@ from sdr.core.application.use_cases.processar_mensagem_recebida import (
 )
 from sdr.core.domain.agente import Persona, RespostaAgente
 from sdr.core.domain.conversa import Canal, Papel
+from sdr.core.domain.eventos import EventoLead, TipoEvento
+from sdr.core.domain.qualificacao import Qualificacao
 from tests.apoio.fakes import (
     AgenteRoteirizado,
     CatalogoFake,
     ConversaRepositoryFake,
+    LeadEventoRepositoryFake,
     LeadRepositoryFake,
     item,
 )
@@ -31,8 +34,14 @@ class Cenario:
         self.conversas = ConversaRepositoryFake()
         self.agente = AgenteRoteirizado(*respostas)
         self.catalogo = CatalogoFake(item("A-1"), item("A-2"), item("A-3"))
+        self.eventos = LeadEventoRepositoryFake()
         self.caso_de_uso = ProcessarMensagemRecebida(
-            self.leads, self.conversas, self.agente, self.catalogo, persona=PERSONA
+            self.leads,
+            self.conversas,
+            self.agente,
+            self.catalogo,
+            eventos=self.eventos,
+            persona=PERSONA,
         )
 
     async def enviar(self, texto: str, remetente: str = "lead-1"):  # type: ignore[no-untyped-def]
@@ -134,3 +143,44 @@ async def test_falha_do_llm_preserva_a_mensagem_do_lead() -> None:
 async def test_mensagem_invalida(texto: str) -> None:
     with pytest.raises(MensagemInvalidaError):
         await Cenario().enviar(texto)
+
+
+async def test_lead_novo_emite_lead_criado_uma_unica_vez() -> None:
+    cenario = Cenario(RespostaAgente("a"), RespostaAgente("b"))
+
+    await cenario.enviar("oi")
+    await cenario.enviar("tudo bem?")
+
+    assert [e.tipo for e in cenario.eventos.eventos] == [TipoEvento.LEAD_CRIADO]
+    assert cenario.eventos.eventos[0].payload == {"canal": "web", "remetente_id": "lead-1"}
+
+
+async def test_persiste_qualificacao_e_eventos_do_turno() -> None:
+    cenario = Cenario(RespostaAgente("placeholder"))
+    resultado_inicial = await cenario.enviar("oi")
+    lead = resultado_inicial.lead
+    nova_qualificacao = Qualificacao(lead.id, intencao_atual="plano", fichas={"plano": {"x": 1}})
+    evento = EventoLead(lead.id, TipoEvento.INTENCAO_IDENTIFICADA, lead.criado_em, {})
+    cenario.agente = AgenteRoteirizado(
+        RespostaAgente(
+            "Qual unidade?",
+            qualificacao=nova_qualificacao,
+            eventos=(evento,),
+            campos_faltantes=("unidade",),
+            metadados={"no_resposta": "especialista"},
+        )
+    )
+    cenario.caso_de_uso._agente = cenario.agente
+
+    resultado = await cenario.enviar("quero um plano")
+
+    assert cenario.leads.leads[lead.id].qualificacao == nova_qualificacao
+    assert cenario.eventos.eventos[-1] is evento
+    assert resultado.campos_faltantes == ("unidade",)
+    assert resultado.resposta.metadados["qualificacao"] == {
+        "intencao": "plano",
+        "campos_faltantes": ["unidade"],
+        "score": None,
+        "proxima_acao": None,
+    }
+    assert resultado.resposta.metadados["agente"] == {"no_resposta": "especialista"}

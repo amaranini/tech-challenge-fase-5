@@ -1,9 +1,11 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
 from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem
+from sdr.core.domain.eventos import EventoLead
 
 
 @dataclass(frozen=True)
@@ -34,4 +36,12 @@ class ConversaRepository(Protocol):
 
     async def ultimas_mensagens(self, conversa_id: UUID, limite: int) -> list[Mensagem]:
         """As `limite` mais recentes, em ordem cronológica."""
+        ...
+
+
+class LeadEventoRepository(Protocol):
+    async def registrar(self, eventos: Sequence[EventoLead]) -> None: ...
+
+    async def listar(self, lead_id: UUID, limite: int = 200) -> list[EventoLead]:
+        """Em ordem cronológica."""
         ...

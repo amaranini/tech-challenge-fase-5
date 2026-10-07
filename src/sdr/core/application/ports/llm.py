@@ -45,6 +45,14 @@ class RespostaLLM:
     extras: Mapping[str, object] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class RespostaEstruturada:
+    dados: Mapping[str, object]
+    modelo: str | None = None
+    tokens_entrada: int = 0
+    tokens_saida: int = 0
+
+
 class LLMIndisponivelError(RuntimeError):
     """Provedor fora do ar, sem credencial, sem cota etc. — falha de infraestrutura."""
 
@@ -61,4 +69,14 @@ class LLMPort(Protocol):
     ) -> RespostaLLM:
         """`forcar_texto`: as ferramentas ficam visíveis (o histórico pode citá-las), mas o
         modelo deve responder em texto — usado quando o agente esgota os passos."""
+        ...
+
+    async def gerar_estruturado(
+        self,
+        mensagens: Sequence[MensagemLLM],
+        schema: Mapping[str, object],
+        nome: str,
+    ) -> RespostaEstruturada:
+        """Saída JSON conforme `schema` (JSON Schema de objeto). Quem chama valida o
+        conteúdo: o provedor pode não garantir aderência total."""
         ...

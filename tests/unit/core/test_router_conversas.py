@@ -10,6 +10,7 @@ from tests.apoio.fakes import (
     AgenteRoteirizado,
     CatalogoFake,
     ConversaRepositoryFake,
+    LeadEventoRepositoryFake,
     LeadRepositoryFake,
     item,
 )
@@ -25,6 +26,7 @@ def cliente(*respostas: RespostaAgente | Exception) -> httpx.AsyncClient:
         conversas,
         AgenteRoteirizado(*respostas),
         CatalogoFake(item("A-1")),
+        eventos=LeadEventoRepositoryFake(),
         persona=PERSONA,
     )
     obter, listar = ObterHistorico(leads, conversas), ListarLeads(leads)

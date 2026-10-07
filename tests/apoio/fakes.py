@@ -3,7 +3,7 @@
 import hashlib
 import math
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from uuid import UUID
 
 from sdr.core.application.ports.agente import EntradaAgente
@@ -11,6 +11,7 @@ from sdr.core.application.ports.llm import (
     ChamadaFerramenta,
     DefinicaoFerramenta,
     MensagemLLM,
+    RespostaEstruturada,
     RespostaLLM,
 )
 from sdr.core.application.ports.repositorios import ResumoLead
@@ -22,6 +23,7 @@ from sdr.core.domain.catalogo import (
     ResultadoCatalogo,
 )
 from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem
+from sdr.core.domain.eventos import EventoLead
 
 DIMENSAO_FAKE = 64
 
@@ -61,9 +63,13 @@ class EmbeddingFake:
 class LLMRoteirizado:
     """LLM fake que devolve respostas pré-definidas, em ordem, e registra as chamadas."""
 
-    def __init__(self, *respostas: RespostaLLM) -> None:
+    def __init__(
+        self, *respostas: RespostaLLM, estruturadas: Sequence[Mapping[str, object]] = ()
+    ) -> None:
         self._respostas = list(respostas)
+        self._estruturadas = list(estruturadas)
         self.chamadas: list[tuple[list[MensagemLLM], list[DefinicaoFerramenta], bool]] = []
+        self.chamadas_estruturadas: list[tuple[list[MensagemLLM], Mapping[str, object], str]] = []
 
     @property
     def modelo(self) -> str:
@@ -79,6 +85,14 @@ class LLMRoteirizado:
         if not self._respostas:
             raise AssertionError("LLM fake sem respostas restantes")
         return self._respostas.pop(0)
+
+    async def gerar_estruturado(
+        self, mensagens: Sequence[MensagemLLM], schema: Mapping[str, object], nome: str
+    ) -> RespostaEstruturada:
+        self.chamadas_estruturadas.append((list(mensagens), schema, nome))
+        if not self._estruturadas:
+            raise AssertionError("LLM fake sem respostas estruturadas restantes")
+        return RespostaEstruturada(self._estruturadas.pop(0), "fake-1", 3, 3)
 
 
 def texto(conteudo: str, tokens: int = 10) -> RespostaLLM:
@@ -169,3 +183,14 @@ class AgenteRoteirizado:
         if isinstance(resposta, Exception):
             raise resposta
         return resposta
+
+
+class LeadEventoRepositoryFake:
+    def __init__(self) -> None:
+        self.eventos: list[EventoLead] = []
+
+    async def registrar(self, eventos: Sequence[EventoLead]) -> None:
+        self.eventos.extend(eventos)
+
+    async def listar(self, lead_id: UUID, limite: int = 200) -> list[EventoLead]:
+        return [e for e in self.eventos if e.lead_id == lead_id][:limite]

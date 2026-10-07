@@ -21,7 +21,9 @@ from sdr.verticals.imobiliario.catalogo.application.use_cases.cadastrar_imoveis 
     CadastrarImoveis,
 )
 from sdr.verticals.imobiliario.config import SettingsImobiliario
-from sdr.verticals.imobiliario.persona.lia import carregar_persona
+from sdr.verticals.imobiliario.persona.lia import carregar_persona, carregar_prompt
+from sdr.verticals.imobiliario.qualificacao.adapters.intencoes import definir_intencoes
+from sdr.verticals.imobiliario.qualificacao.domain.regras import RegrasImobiliarias
 
 CATALOGO_INICIAL = Path(__file__).resolve().parent / "dados" / "imoveis.json"
 
@@ -60,6 +62,14 @@ class PackImobiliario:
             catalogo=catalogo,
             carregar_catalogo_inicial=carregar_catalogo_inicial,
             persona=carregar_persona(self._settings.versao_prompt),
+            intencoes=definir_intencoes(
+                {
+                    nome: carregar_prompt(f"especialistas/{nome}_v1")
+                    for nome in ("compra", "aluguel", "investimento")
+                }
+            ),
+            regras_qualificacao=RegrasImobiliarias(),
+            prompt_descoberta=carregar_prompt("descoberta_v1"),
             ferramentas=[FerramentaBuscarCatalogo(catalogo, DEFINICAO_BUSCAR_IMOVEIS)],
             routers=[criar_router(buscar_imoveis, repositorio)],
         )

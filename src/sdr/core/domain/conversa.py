@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
+from sdr.core.domain.qualificacao import Qualificacao
+
 
 def agora() -> datetime:
     return datetime.now(UTC)
@@ -30,21 +32,30 @@ class StatusConversa(StrEnum):
 class Lead:
     """Pessoa atendida, identificada pelo canal + id do remetente nesse canal.
 
-    `ficha_qualificacao` é opaca para o core (JSONB): o schema é da vertical.
+    A ficha de qualificação (dentro de `qualificacao`) é opaca para o core: os campos e o
+    schema são da vertical.
     """
 
     id: UUID
     canal: Canal
     remetente_id: str
     criado_em: datetime
+    qualificacao: Qualificacao
     nome: str | None = None
-    ficha_qualificacao: Mapping[str, object] = field(default_factory=dict)
 
     @classmethod
     def novo(cls, canal: Canal, remetente_id: str, nome: str | None = None) -> "Lead":
         if not remetente_id.strip():
             raise ValueError("remetente_id é obrigatório")
-        return cls(id=uuid4(), canal=canal, remetente_id=remetente_id, criado_em=agora(), nome=nome)
+        lead_id = uuid4()
+        return cls(
+            id=lead_id,
+            canal=canal,
+            remetente_id=remetente_id,
+            criado_em=agora(),
+            qualificacao=Qualificacao(lead_id),
+            nome=nome,
+        )
 
 
 @dataclass(frozen=True)

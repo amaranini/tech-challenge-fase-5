@@ -1,5 +1,6 @@
 """Lead/Conversa/Mensagem contra Postgres real (banco sdr_test)."""
 
+from dataclasses import replace
 from datetime import timedelta
 
 import pytest
@@ -8,32 +9,56 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from sdr.core.adapters.outbound.persistence.repositorios_conversa_sql import (
     ConversaRepositorySql,
+    LeadEventoRepositorySql,
     LeadRepositorySql,
 )
 from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem, Papel
+from sdr.core.domain.eventos import EventoLead, TipoEvento
+from sdr.core.domain.qualificacao import Classificacao, Qualificacao, Score
 
 pytestmark = pytest.mark.integration
 
 
-async def test_lead_por_canal_e_remetente_com_ficha_jsonb(
+async def test_lead_com_qualificacao_persistida(
     sessoes: async_sessionmaker[AsyncSession],
 ) -> None:
     leads = LeadRepositorySql(sessoes)
     lead = Lead.novo(Canal.WEB, "ana")
-
     await leads.salvar(lead)
-    await leads.salvar(
-        Lead(lead.id, lead.canal, lead.remetente_id, lead.criado_em, "Ana", {"quartos": 2})
+
+    qualificacao = Qualificacao(
+        lead_id=lead.id,
+        intencao_atual="compra",
+        fichas={"compra": {"quartos": 2, "bairros": ["Saúde"]}, "aluguel": {"quartos": 1}},
+        score=Score(70, Classificacao.QUENTE, ("orçamento definido",)),
+        proxima_acao="agendar_visita",
+        qualificado_em=lead.criado_em,
     )
+    await leads.salvar(replace(lead, nome="Ana", qualificacao=qualificacao))
 
     salvo = await leads.obter_por_remetente(Canal.WEB, "ana")
     assert salvo is not None
-    assert (salvo.id, salvo.nome, dict(salvo.ficha_qualificacao)) == (
-        lead.id,
-        "Ana",
-        {"quartos": 2},
-    )
+    assert salvo.nome == "Ana"
+    assert salvo.qualificacao == qualificacao
     assert await leads.obter_por_remetente(Canal.WHATSAPP, "ana") is None
+
+
+async def test_eventos_do_lead_em_ordem(sessoes: async_sessionmaker[AsyncSession]) -> None:
+    leads, eventos = LeadRepositorySql(sessoes), LeadEventoRepositorySql(sessoes)
+    lead = Lead.novo(Canal.WEB, "caio")
+    await leads.salvar(lead)
+    t0 = lead.criado_em
+
+    await eventos.registrar(
+        [
+            EventoLead(lead.id, TipoEvento.SCORE_ALTERADO, t0 + timedelta(seconds=1), {"para": 40}),
+            EventoLead(lead.id, TipoEvento.LEAD_CRIADO, t0, {"canal": "web"}),
+        ]
+    )
+
+    registrados = await eventos.listar(lead.id)
+    assert [e.tipo for e in registrados] == [TipoEvento.LEAD_CRIADO, TipoEvento.SCORE_ALTERADO]
+    assert registrados[1].payload == {"para": 40}
 
 
 async def test_remetente_duplicado_no_mesmo_canal_e_rejeitado(

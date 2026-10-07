@@ -119,3 +119,23 @@ async def test_erro_de_conexao_vira_indisponibilidade() -> None:
     erro = openai.APIConnectionError(request=httpx.Request("POST", "https://api.openai.com"))
     with pytest.raises(LLMIndisponivelError, match="APIConnectionError"):
         await llm(ClienteFake(erro=erro)).gerar([])
+
+
+async def test_saida_estruturada_usa_json_schema_e_le_o_json() -> None:
+    cliente = ClienteFake(resposta_openai('{"intencao": "compra", "confianca": 0.9}'))
+    schema = {"type": "object", "properties": {"intencao": {"type": "string"}}}
+
+    resposta = await llm(cliente).gerar_estruturado([], schema, "roteador")
+
+    assert resposta.dados == {"intencao": "compra", "confianca": 0.9}
+    assert cliente.parametros["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {"name": "roteador", "schema": schema, "strict": False},
+    }
+    assert cliente.parametros["temperature"] == 0
+
+
+@pytest.mark.parametrize("conteudo", ["não é json", "[1, 2]", None])
+async def test_saida_estruturada_invalida_vira_dicionario_vazio(conteudo: str | None) -> None:
+    resposta = await llm(ClienteFake(resposta_openai(conteudo))).gerar_estruturado([], {}, "x")
+    assert resposta.dados == {}

@@ -5,6 +5,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from sdr.core.domain.catalogo import ItemCatalogo
+from sdr.core.domain.eventos import EventoLead
+from sdr.core.domain.qualificacao import Qualificacao
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,9 @@ class RespostaAgente:
     modelo: str | None = None
     tokens_entrada: int = 0
     tokens_saida: int = 0
+    qualificacao: Qualificacao | None = None  # estado após o turno (None = inalterado)
+    eventos: tuple[EventoLead, ...] = ()  # eventos de domínio emitidos no turno
+    campos_faltantes: tuple[str, ...] = ()
     metadados: dict[str, object] = field(default_factory=dict)
 
 

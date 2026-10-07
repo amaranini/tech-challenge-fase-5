@@ -22,7 +22,10 @@ class Settings(BaseSettings):
 
     # LLM (provedor escolhido no bootstrap)
     llm_provider: str = "openai"
-    llm_modelo: str = "gpt-4.1-mini"
+    llm_modelo: str = "gpt-4.1-mini"  # padrão para todos os nós
+    llm_model_router: str | None = None  # roteador de intenção (se vazio, usa llm_modelo)
+    llm_model_agent: str | None = None  # especialistas e descoberta
+    llm_model_extraction: str | None = None  # extração estruturada da ficha
     llm_temperatura: float | None = 0.4
     llm_timeout_s: float = 40.0
     openai_api_key: SecretStr | None = None
@@ -30,6 +33,8 @@ class Settings(BaseSettings):
     # Agente
     agente_max_passos: int = 4  # máximo de rodadas LLM ↔ ferramentas por mensagem
     conversa_janela_historico: int = 30  # mensagens anteriores enviadas ao agente
+    router_confianca_min: float = 0.6  # abaixo disso, não troca de intenção
+    extracao_janela_mensagens: int = 6  # mensagens recentes lidas por roteador/extração
 
 
 @lru_cache

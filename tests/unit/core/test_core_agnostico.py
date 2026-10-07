@@ -16,7 +16,9 @@ VOCABULARIO_DE_VERTICAL = re.compile(r"im[oó]ve(l|is)|imobili|corretor|\bmetr[o
 
 
 @pytest.mark.parametrize(
-    "arquivo", sorted(RAIZ_CORE.rglob("*.py")), ids=lambda p: str(p.relative_to(RAIZ_CORE))
+    "arquivo",
+    sorted([*RAIZ_CORE.rglob("*.py"), *RAIZ_CORE.rglob("*.md")]),
+    ids=lambda p: str(p.relative_to(RAIZ_CORE)),
 )
 def test_core_nao_menciona_vertical(arquivo: Path) -> None:
     ocorrencias = [

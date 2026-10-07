@@ -1,10 +1,16 @@
+from collections.abc import Sequence
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from sdr.core.adapters.outbound.persistence.modelos import ConversaModel, LeadModel, MensagemModel
+from sdr.core.adapters.outbound.persistence.modelos import (
+    ConversaModel,
+    LeadEventoModel,
+    LeadModel,
+    MensagemModel,
+)
 from sdr.core.application.ports.repositorios import ResumoLead
 from sdr.core.domain.conversa import (
     Canal,
@@ -14,6 +20,22 @@ from sdr.core.domain.conversa import (
     Papel,
     StatusConversa,
 )
+from sdr.core.domain.eventos import EventoLead, TipoEvento
+from sdr.core.domain.qualificacao import Classificacao, Qualificacao, Score
+
+
+def _qualificacao(m: LeadModel) -> Qualificacao:
+    score = None
+    if m.score is not None and m.classificacao is not None:
+        score = Score(m.score, Classificacao(m.classificacao), tuple(m.score_motivos or ()))
+    return Qualificacao(
+        lead_id=m.id,
+        intencao_atual=m.intencao_atual,
+        fichas={k: dict(v) for k, v in (m.ficha_qualificacao or {}).items()},
+        score=score,
+        proxima_acao=m.proxima_acao,
+        qualificado_em=m.qualificado_em,
+    )
 
 
 def _lead(m: LeadModel) -> Lead:
@@ -22,8 +44,8 @@ def _lead(m: LeadModel) -> Lead:
         canal=Canal(m.canal),
         remetente_id=m.remetente_id,
         criado_em=m.criado_em,
+        qualificacao=_qualificacao(m),
         nome=m.nome,
-        ficha_qualificacao=dict(m.ficha_qualificacao or {}),
     )
 
 
@@ -63,22 +85,27 @@ class LeadRepositorySql:
         return _lead(modelo) if modelo else None
 
     async def salvar(self, lead: Lead) -> None:
-        valores = {
-            "id": lead.id,
-            "canal": lead.canal.value,
-            "remetente_id": lead.remetente_id,
+        q = lead.qualificacao
+        mutaveis = {
             "nome": lead.nome,
-            "ficha_qualificacao": dict(lead.ficha_qualificacao),
-            "criado_em": lead.criado_em,
+            "ficha_qualificacao": {k: dict(v) for k, v in q.fichas.items()},
+            "intencao_atual": q.intencao_atual,
+            "score": q.score.pontos if q.score else None,
+            "classificacao": q.score.classificacao.value if q.score else None,
+            "score_motivos": list(q.score.motivos) if q.score else [],
+            "proxima_acao": q.proxima_acao,
+            "qualificado_em": q.qualificado_em,
         }
-        stmt = insert(LeadModel).values(valores)
+        stmt = insert(LeadModel).values(
+            id=lead.id,
+            canal=lead.canal.value,
+            remetente_id=lead.remetente_id,
+            criado_em=lead.criado_em,
+            **mutaveis,
+        )
         stmt = stmt.on_conflict_do_update(
             index_elements=[LeadModel.id],
-            set_={
-                "nome": stmt.excluded.nome,
-                "ficha_qualificacao": stmt.excluded.ficha_qualificacao,
-                "atualizado_em": func.now(),
-            },
+            set_={**{c: stmt.excluded[c] for c in mutaveis}, "atualizado_em": func.now()},
         )
         async with self._sessoes.begin() as sessao:
             await sessao.execute(stmt)
@@ -157,3 +184,38 @@ class ConversaRepositorySql:
                 )
             ).all()
         return [_mensagem(m) for m in reversed(modelos)]
+
+
+class LeadEventoRepositorySql:
+    def __init__(self, sessoes: async_sessionmaker[AsyncSession]) -> None:
+        self._sessoes = sessoes
+
+    async def registrar(self, eventos: Sequence[EventoLead]) -> None:
+        if not eventos:
+            return
+        async with self._sessoes.begin() as sessao:
+            sessao.add_all(
+                LeadEventoModel(
+                    id=e.id,
+                    lead_id=e.lead_id,
+                    tipo=e.tipo.value,
+                    payload=dict(e.payload),
+                    ocorrido_em=e.ocorrido_em,
+                )
+                for e in eventos
+            )
+
+    async def listar(self, lead_id: UUID, limite: int = 200) -> list[EventoLead]:
+        async with self._sessoes() as sessao:
+            modelos = (
+                await sessao.scalars(
+                    select(LeadEventoModel)
+                    .where(LeadEventoModel.lead_id == lead_id)
+                    .order_by(LeadEventoModel.ocorrido_em, LeadEventoModel.id)
+                    .limit(limite)
+                )
+            ).all()
+        return [
+            EventoLead(m.lead_id, TipoEvento(m.tipo), m.ocorrido_em, dict(m.payload), m.id)
+            for m in modelos
+        ]

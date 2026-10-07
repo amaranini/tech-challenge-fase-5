@@ -2,7 +2,7 @@
 
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import openai
@@ -14,6 +14,7 @@ from sdr.core.application.ports.llm import (
     LLMIndisponivelError,
     MensagemLLM,
     PapelLLM,
+    RespostaEstruturada,
     RespostaLLM,
 )
 
@@ -128,6 +129,44 @@ class LLMOpenAI:
         return RespostaLLM(
             conteudo=mensagem.content or "",
             chamadas=chamadas,
+            modelo=resposta.model,
+            tokens_entrada=uso.prompt_tokens if uso else 0,
+            tokens_saida=uso.completion_tokens if uso else 0,
+        )
+
+    async def gerar_estruturado(
+        self,
+        mensagens: Sequence[MensagemLLM],
+        schema: Mapping[str, object],
+        nome: str,
+    ) -> RespostaEstruturada:
+        if self._cliente is None:
+            raise LLMIndisponivelError("OPENAI_API_KEY não configurada no .env")
+
+        parametros: dict[str, Any] = {
+            "model": self._modelo,
+            "messages": [para_openai(m) for m in mensagens],
+            # strict=False: aceita schemas com campos opcionais; quem chama valida o conteúdo.
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": nome, "schema": dict(schema), "strict": False},
+            },
+            "temperature": 0,
+        }
+        try:
+            resposta = await self._cliente.chat.completions.create(**parametros)
+        except _ERROS_INDISPONIBILIDADE as erro:
+            raise LLMIndisponivelError(f"OpenAI indisponível: {type(erro).__name__}") from erro
+
+        conteudo = resposta.choices[0].message.content or "{}"
+        try:
+            dados = json.loads(conteudo)
+        except json.JSONDecodeError:
+            logger.warning("Saída estruturada com JSON inválido (%s): %r", nome, conteudo[:200])
+            dados = {}
+        uso = resposta.usage
+        return RespostaEstruturada(
+            dados=dados if isinstance(dados, dict) else {},
             modelo=resposta.model,
             tokens_entrada=uso.prompt_tokens if uso else 0,
             tokens_saida=uso.completion_tokens if uso else 0,

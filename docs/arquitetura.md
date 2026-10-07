@@ -7,7 +7,9 @@ Este documento descreve como o sistema é organizado. Ele se apoia em três deci
 - **core de SDR genérico separado das verticais de negócio:**
   [ADR 003](adr/003-core-multi-segmento.md);
 - **agente com LLM por port, LangGraph como orquestrador e memória no banco:**
-  [ADR 004](adr/004-agente-llm-memoria.md).
+  [ADR 004](adr/004-agente-llm-memoria.md);
+- **grafo genérico de qualificação (roteador, extração, scoring, especialistas):**
+  [ADR 005](adr/005-grafo-qualificacao-multiagente.md).
 
 ## 1. Contexto
 
@@ -57,7 +59,7 @@ flowchart TB
         pack[[pack.py — PackImobiliario<br/>composition root da vertical]]
         cat[catalogo/<br/>Imovel · BuscarImoveis · índice pgvector<br/>CatalogoImobiliario · rota /imoveis/busca]
         persona[persona/ — Lia + prompts versionados]
-        qualif[qualificacao/ — ficha Pydantic, scoring]:::futuro
+        qualif[qualificacao/<br/>intenções · fichas Pydantic · regras de scoring]
     end
 
     boot -- "1. cria a infra" --> infra
@@ -66,6 +68,7 @@ flowchart TB
     pack --> cat
     cat -. "CatalogoImobiliario implementa" .-> cport
     pack --> persona
+    pack --> qualif
     pack -- "3. VerticalMontada: catalogo, persona, ferramentas, routers, carga inicial" --> boot
 
     classDef futuro stroke-dasharray: 5 5
@@ -101,7 +104,7 @@ flowchart TB
             persist[persistence<br/>engine · Base ORM · leads/conversas/mensagens]
             emb[embeddings<br/>fastembed]
             llm[llm — OpenAI]
-            agent[agent — LangGraph]
+            agent[agent — LangGraph<br/>AgenteQualificador]
         end
     end
 
@@ -188,8 +191,9 @@ sequenceDiagram
     B->>P: montar(InfraCompartilhada(sessoes, embedding))
     P->>P: valida dimensão do embedding × coluna vector(384)
     P->>P: instancia repositório, índice pgvector, interpretador, casos de uso
-    P-->>B: VerticalMontada(catalogo, persona Lia, ferramentas=[buscar_imoveis], routers, carga)
-    B->>B: LLMOpenAI (LLM_PROVIDER) + AgenteLangGraph(llm, persona, ferramentas)
+    P-->>B: VerticalMontada(catalogo, persona, ferramentas, intencoes, regras, prompt_descoberta, routers, carga)
+    B->>B: LLMOpenAI por nó (LLM_MODEL_ROUTER/EXTRACTION/AGENT)
+    B->>B: AgenteQualificador(llms, persona, ConfigQualificacao(intencoes, regras, descoberta))
     B->>B: ProcessarMensagemRecebida(leads, conversas, agente, catalogo, persona)
     B->>A: criar_app(Dependencias, routers=vertical.routers)
 ```
@@ -218,7 +222,27 @@ Os próximos fluxos seguem o mesmo desenho: o router só traduz HTTP ↔ caso de
 de um lead, venha do chat web ou do WhatsApp, vira um `MensagemRecebida` e entra no mesmo
 `ProcessarMensagemRecebida`, do core.
 
-## 6. Mensagem do lead → resposta da Lia (`POST /conversas/mensagens`)
+## 6. Grafo de qualificação (um turno)
+
+```mermaid
+flowchart TD
+    START([mensagem + estado do lead]) --> R["roteador<br/>LLM_MODEL_ROUTER · saída estruturada"]
+    R --> D{"Qualificacao.aplicar_intencao<br/>(domínio do core)"}
+    D -- "sem intenção" --> DESC["descoberta<br/>prompt de descoberta da vertical"]
+    D -- "intenção X (nova, mantida ou trocada)" --> EX["extração<br/>LLM_MODEL_EXTRACTION · schema da intenção X"]
+    EX --> M["SchemaFicha.validar (vertical)<br/>+ Qualificacao.aplicar_extracao (merge)"]
+    M --> SC["RegrasQualificacao.pontuar / qualificado (vertical)<br/>+ Qualificacao.aplicar_score · campos_faltantes"]
+    SC --> ESP["especialista X<br/>LLM_MODEL_AGENT · persona + prompt X<br/>+ bloco de estado (próximo campo, score, próxima ação)"]
+    ESP <-- "tool calls" --> T["ferramentas<br/>buscar_imoveis → CatalogoPort"]
+    DESC <-- "tool calls" --> T
+    ESP --> FIM([texto + Qualificacao + eventos])
+    DESC --> FIM
+```
+
+O caso de uso grava a mensagem da Lia, o `Lead` (colunas e fichas JSONB) e os eventos em
+`lead_eventos`. O grafo não persiste nada.
+
+## 7. Mensagem do lead → resposta da Lia (`POST /conversas/mensagens`)
 
 ```mermaid
 sequenceDiagram
@@ -226,7 +250,7 @@ sequenceDiagram
     participant R as router conversas (core)
     participant U as ProcessarMensagemRecebida (core)
     participant DB as Lead/ConversaRepository
-    participant G as AgenteLangGraph (core)
+    participant G as AgenteQualificador (core)
     participant L as LLMOpenAI (core)
     participant T as FerramentaBuscarCatalogo → CatalogoPort
     participant V as CatalogoImobiliario (vertical)
@@ -235,8 +259,9 @@ sequenceDiagram
     R->>U: MensagemRecebida(canal=web, remetente_id=lead_id, texto)
     U->>DB: obter/criar Lead e Conversa aberta; últimas N mensagens
     U->>DB: grava mensagem do LEAD (antes do LLM)
-    U->>G: responder(lead, histórico, texto)
-    G->>L: persona + contexto + histórico (+ lembrete de itens já citados), tools
+    U->>G: responder(lead + Qualificacao, histórico, texto)
+    G->>L: roteador e extração (saída estruturada) → merge e scoring (ver §6)
+    G->>L: especialista: persona + prompt + estado + histórico, tools
     L-->>G: tool_call buscar_imoveis(texto, filtros)
     G->>T: executar(argumentos)
     T->>V: buscar(ConsultaCatalogo) → BuscarImoveis (busca híbrida)
@@ -244,9 +269,10 @@ sequenceDiagram
     T-->>G: JSON com itens
     G->>L: histórico + resultado da tool
     L-->>G: texto curto citando IMV-001, IMV-005...
-    G-->>U: RespostaAgente(texto, itens consultados, tokens)
+    G-->>U: RespostaAgente(texto, itens, tokens, Qualificacao nova, eventos)
     U->>V: códigos citados existem? (obter) — senão 1 correção, depois fallback
-    U->>DB: grava mensagem da LIA (itens citados, prompt_versao, modelo, tokens)
+    U->>DB: grava mensagem da LIA (itens citados, prompt_versao, modelo, tokens, roteamento)
+    U->>DB: grava Lead (intenção, fichas, score, próxima ação) e lead_eventos
     U-->>R: ResultadoProcessamento
     R-->>W: {resposta, itens_sugeridos}
 ```
@@ -254,7 +280,7 @@ sequenceDiagram
 Reabrir o mesmo `lead_id` reencontra o mesmo Lead (canal + remetente) e a conversa aberta.
 O histórico vem do banco, que é a fonte única da memória.
 
-## 7. Busca híbrida de imóveis (`POST /imoveis/busca`, rota da vertical)
+## 8. Busca híbrida de imóveis (`POST /imoveis/busca`, rota da vertical)
 
 ```mermaid
 sequenceDiagram
@@ -292,7 +318,7 @@ rejeitadas), chama o mesmo `BuscarImoveis` e devolve `ItemCatalogo` com `resumo`
 2. `EmbeddingPort.gerar_documentos(texto_semantico)` gera os vetores;
 3. `IndiceImoveisPort.indexar` grava os vetores no índice.
 
-## 8. Implantação local
+## 9. Implantação local
 
 ```mermaid
 flowchart LR

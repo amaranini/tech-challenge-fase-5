@@ -1,6 +1,6 @@
 # CLAUDE.md — Agente SDR Conversacional (vertical ativa: imobiliário)
 
-## Fase atual: Dia 1 — Etapa C (agente conversacional com memória)
+## Fase atual: Dia 2 — Etapa A
 
 Ao fim de CADA etapa: parar, listar como verificar o critério de aceite e esperar o ok da PO.
 
@@ -31,12 +31,14 @@ src/sdr/
   core/                    SDR genérico — NÃO menciona imóvel (há teste que garante)
     domain/                dataclasses puras: conversa.py (Lead, Conversa, Mensagem, Canal,
                            Papel), agente.py (Persona, RespostaAgente), catalogo.py
-                           (ItemCatalogo, ConsultaCatalogo, ResultadoCatalogo); depois
-                           Agendamento, Qualificacao, Score
+                           (ItemCatalogo...), qualificacao.py (agregado Qualificacao com as
+                           regras de intenção/merge/faltantes/score; IntencaoVertical,
+                           SchemaFicha, RegrasQualificacao, Score), eventos.py (EventoLead);
+                           depois Agendamento
     application/
-      ports/               Protocols: CatalogoPort, EmbeddingPort, VerificadorSaudePort, LLMPort,
-                           AgenteConversacionalPort, Ferramenta, LeadRepository,
-                           ConversaRepository; depois AgendaPort, CRMPort, CanalMensagemPort
+      ports/               Protocols: CatalogoPort, EmbeddingPort, VerificadorSaudePort, LLMPort
+                           (texto + saída estruturada), AgenteConversacionalPort, Ferramenta,
+                           LeadRepository, ConversaRepository, LeadEventoRepository; depois AgendaPort, CRMPort, CanalMensagemPort
                            (prevê TEMPLATE fora da janela de 24h do WhatsApp)
       ferramentas/         tools genéricas do agente (FerramentaBuscarCatalogo → CatalogoPort)
       use_cases/           um caso de uso por arquivo: ProcessarMensagemRecebida (entrada única
@@ -46,12 +48,15 @@ src/sdr/
     adapters/              infraestrutura GENÉRICA, reaproveitada por qualquer vertical
       inbound/http/        app FastAPI (registra routers da vertical), /health, /conversas, /leads
       outbound/persistence/  engine async (SQLAlchemy + psycopg 3), Base ORM compartilhado,
-                             leads/conversas/mensagens (metadados e ficha em JSONB)
+                             leads (fichas JSONB + projeções da qualificação), conversas,
+                             mensagens, lead_eventos
       outbound/embeddings/   fastembed (ONNX) local multilíngue (ADR 002)
       outbound/llm/          LLMOpenAI (Chat Completions + tool calling); provedor via
                              LLM_PROVIDER, modelo via LLM_MODELO (ADR 004)
-      outbound/agent/        AgenteLangGraph (agente ⇄ ferramentas) implementando
-                             AgenteConversacionalPort; memória vem do banco, não do LangGraph
+      outbound/agent/        AgenteQualificador (LangGraph): roteador → extração → scoring →
+                             especialista ⇄ ferramentas | descoberta (ADR 005); LLM por nó;
+                             prompts genéricos em agent/prompts/ (roteador, extração);
+                             memória vem do banco, não do LangGraph
     vertical.py            contrato VerticalPack + InfraCompartilhada + VerticalMontada
   verticals/
     imobiliario/
@@ -65,8 +70,11 @@ src/sdr/
         adapters/          ORM/repositório SQL, índice pgvector, interpretador por regras,
                            esquema de filtros (Pydantic), CatalogoImobiliario (→ CatalogoPort),
                            definição da tool buscar_imoveis, rotas /imoveis, carga do JSON
-      persona/             Lia: lia.py + prompts/<versao>.md (IMOBILIARIO_VERSAO_PROMPT)
-      (Dia 2)   qualificacao/  schema Pydantic da ficha por intenção, scoring, especialistas
+      persona/             Lia: lia.py + prompts/<versao>.md (IMOBILIARIO_VERSAO_PROMPT),
+                           prompts/descoberta_v1.md, prompts/especialistas/<intencao>_v1.md
+      qualificacao/        domain/regras.py (scoring + critério de qualificado, puro);
+                           adapters/fichas.py (Pydantic por intenção), schema_pydantic.py
+                           (SchemaFicha sobre Pydantic), intencoes.py (IntencaoVertical)
   config/                  pydantic-settings GENÉRICO (inclui VERTICAL=imobiliario)
   bootstrap.py             composition root — instancia a infra do core, escolhe a vertical
                            pelo registro VERTICAIS e chama pack.montar(infra)
@@ -90,12 +98,12 @@ docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
     (ex.: `CatalogoPort`, com filtros como dicionário no vocabulário da vertical).
   - A vertical ativa é escolhida no bootstrap via `VERTICAL=imobiliario`.
   - `VerticalPack` cresce só quando um campo é USADO (YAGNI). Hoje: catálogo, rotas, carga
-    inicial, persona e ferramentas. Depois: intenções, validador da ficha, scoring,
-    especialistas (Dia 2); cadência de follow-up (Dia 3). Sem segunda vertical e sem motor
-    de configuração genérico.
-  - **Ficha de qualificação do lead:** persistida como **JSONB** (no core, opaca) e validada
-    pelo schema Pydantic da vertical — o core só conhece um Protocol de validação, nunca
-    Pydantic. Vale da Etapa C em diante.
+    inicial, persona, ferramentas, intenções (schema, prioridade de campos, prompt do
+    especialista, próxima ação), regras de qualificação e prompt de descoberta. Depois:
+    cadência de follow-up (Dia 3). Sem segunda vertical e sem motor de configuração genérico.
+  - **Ficha de qualificação:** uma por intenção, em **JSONB** (`{"compra": {...}}`), validada
+    campo a campo pelo schema da vertical (Protocol `SchemaFicha`; Pydantic só na vertical).
+    Intenção "indefinida" é do core; a vertical nunca a declara.
   - Tabelas da vertical usam o `Base` do core; migrations num histórico único. Migrations já
     aplicadas NUNCA são reescritas — mudança de schema = migration nova.
 - **Hexágono**
@@ -114,6 +122,12 @@ docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
   - Nada fora da base: códigos citados são conferidos no catálogo; código inexistente ⇒ uma
     correção; persistindo ⇒ fallback da persona.
   - Prompts versionados em arquivo; toda resposta grava prompt_versao, modelo e tokens.
+- **Qualificação (ADR 005)**
+  - Regras universais (troca de intenção, merge, faltantes, eventos) no agregado
+    `Qualificacao` do domínio; nós do grafo só orquestram. Scoring/critério são da vertical.
+  - Merge: nulo nunca apaga; campo preenchido só muda com correção explícita e só some com
+    remoção explícita. Especialista faz no máximo UMA pergunta (próximo campo por prioridade).
+  - Toda mudança relevante vira evento em `lead_eventos`.
 - **Gerais**
   - Toda config e chave via `.env` (commitar `.env.example`; nunca segredos).
   - Código e nomes de domínio em **português**; termos técnicos consagrados em inglês.
@@ -124,9 +138,10 @@ docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
 1. Camadas globais: `(main | cli) > bootstrap > (verticals | config) > core`.
 2. `sdr.core` não importa `sdr.verticals`.
 3. Hexágono do core: `vertical > adapters > application > domain` (container `sdr.core`).
-4. Vertical imobiliária: `pack > (config | catalogo | persona)`; e cada fatia `adapters > application >
-   domain` (container `sdr.verticals.imobiliario.catalogo`).
-5. Núcleos puros (domain/application do core e das fatias) não importam fastapi, starlette,
+4. Vertical imobiliária: `pack > (config | catalogo | persona | qualificacao)`; fatias
+   hexagonais: `catalogo` (`adapters > application > domain`) e `qualificacao`
+   (`adapters > domain`).
+5. Núcleos puros (domain/application do core, catalogo e qualificacao.domain) não importam fastapi, starlette,
    pydantic, pydantic_settings, sqlalchemy, psycopg, alembic, streamlit, httpx, uvicorn,
    fastembed, onnxruntime, numpy, pgvector, openai, langgraph, langchain_core (adicionar
    twilio etc. quando entrarem como dependência).
@@ -144,6 +159,8 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
 - `make seed` (= `python -m sdr.cli seed`) — carrega o catálogo inicial da vertical ativa +
   embeddings (idempotente). Rodar após subir o compose.
 - `make busca q="apê 2 quartos zona sul até 800 mil perto do metrô"` — testa POST /imoveis/busca.
+- LLM por nó: `LLM_MODEL_ROUTER`, `LLM_MODEL_EXTRACTION`, `LLM_MODEL_AGENT` (vazio = `LLM_MODELO`);
+  `ROUTER_CONFIANCA_MIN` (0.6) para trocar de intenção.
 - `make e2e` — aceite da Etapa C com LLM real contra a API no ar (custa tokens; precisa de
   OPENAI_API_KEY no .env). Fora do `make check` (`addopts = -m 'not e2e'`).
 - Chat: http://localhost:8501 (Streamlit) ou `POST /conversas/mensagens {lead_id, texto}`.
@@ -159,8 +176,18 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
   - Refactor — core genérico × vertical imobiliária (VerticalPack, CatalogoPort) — ADR 003
   - Etapa C — Agente conversacional (LangGraph + OpenAI) com memória + chat Streamlit
     (Lead/Conversa/Mensagem no core; persona Lia e prompts na vertical)
-- **Dia 2** — Roteador de intenção + agentes especialistas (compra/aluguel/investimento) +
-  ficha estruturada do lead (JSONB + schema da vertical) + scoring quente/morno/frio
+- **Dia 2** — Qualificação + multiagentes
+  - Etapa A — Grafo genérico no core: roteador de intenção (com troca e "indefinida" →
+    descoberta) → extração estruturada com merge incremental da ficha (JSONB) → scoring →
+    especialista; VerticalPack com intenções/schemas/prioridades/scoring/critério/prompts;
+    eventos em `lead_eventos`; modelo LLM por nó (LLM_MODEL_ROUTER/AGENT/EXTRACTION)
+  - Etapa B — Vertical imobiliária: intenções compra/aluguel/investimento, schemas Pydantic,
+    scoring por regras com score_motivos, critério de qualificado e proxima_acao,
+    prompts dos especialistas (persona Lia)
+  - Etapa C — GET /leads/{id}, painel de qualificação no Streamlit, cenários com LLM real
+    (`pytest -m llm`) salvos em evals/cenarios/
+  - Aceite do dia: Exemplos 1 e 2 do enunciado ponta a ponta no chat com ficha, score e
+    próxima ação no painel; lint-imports, ruff, mypy e pytest passam; `pytest -m llm` passa
 - **Dia 3** — Agenda mock de corretores + resumo para corretor + worker de follow-up
 - **Dia 4** — Dashboard + WhatsApp (Twilio Sandbox) + observabilidade Langfuse
 - **Dia 5** — Deploy cloud + guardrails/mascaramento de PII + eval + README e docs finais
@@ -168,7 +195,8 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
 ## Fora de escopo agora
 
 - Segunda vertical e motor de configuração genérico de verticais (YAGNI — ADR 003).
-- Qualificação do lead, scoring, roteador de intenção e multiagentes (Dia 2).
+- Agendamento de visita (no Dia 2 só se marca `proxima_acao`), resumo para corretor e
+  follow-up (Dia 3).
 - Agenda, resumo para corretor, worker de follow-up (Dia 3).
 - Dashboard, WhatsApp/Twilio, Langfuse (Dia 4).
 - Deploy, guardrails/PII, eval (Dia 5).

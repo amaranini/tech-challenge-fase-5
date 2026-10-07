@@ -6,10 +6,15 @@ from dataclasses import dataclass, replace
 from sdr.core.application.dto.mensagem_recebida import MensagemRecebida
 from sdr.core.application.ports.agente import AgenteConversacionalPort, EntradaAgente
 from sdr.core.application.ports.catalogo import CatalogoPort
-from sdr.core.application.ports.repositorios import ConversaRepository, LeadRepository
+from sdr.core.application.ports.repositorios import (
+    ConversaRepository,
+    LeadEventoRepository,
+    LeadRepository,
+)
 from sdr.core.domain.agente import Persona, RespostaAgente
 from sdr.core.domain.catalogo import ItemCatalogo
 from sdr.core.domain.conversa import Conversa, Lead, Mensagem, Papel
+from sdr.core.domain.eventos import EventoLead, TipoEvento
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +32,7 @@ class ResultadoProcessamento:
     conversa: Conversa
     resposta: Mensagem
     itens_sugeridos: tuple[ItemCatalogo, ...]
+    campos_faltantes: tuple[str, ...] = ()
 
 
 class ProcessarMensagemRecebida:
@@ -37,10 +43,12 @@ class ProcessarMensagemRecebida:
         agente: AgenteConversacionalPort,
         catalogo: CatalogoPort,
         *,
+        eventos: LeadEventoRepository,
         persona: Persona,
         janela_historico: int = JANELA_HISTORICO_PADRAO,
     ) -> None:
         self._leads = leads
+        self._eventos = eventos
         self._conversas = conversas
         self._agente = agente
         self._catalogo = catalogo
@@ -81,13 +89,28 @@ class ProcessarMensagemRecebida:
         conversa = conversa.tocar(enviada.criada_em)
         await self._conversas.salvar(conversa)
 
-        return ResultadoProcessamento(lead, conversa, enviada, itens)
+        if resposta.qualificacao is not None and resposta.qualificacao != lead.qualificacao:
+            lead = replace(lead, qualificacao=resposta.qualificacao)
+            await self._leads.salvar(lead)
+        await self._eventos.registrar(resposta.eventos)
+
+        return ResultadoProcessamento(lead, conversa, enviada, itens, resposta.campos_faltantes)
 
     async def _obter_ou_criar_lead(self, mensagem: MensagemRecebida) -> Lead:
         lead = await self._leads.obter_por_remetente(mensagem.canal, mensagem.remetente_id)
         if lead is None:
             lead = Lead.novo(mensagem.canal, mensagem.remetente_id)
             await self._leads.salvar(lead)
+            await self._eventos.registrar(
+                [
+                    EventoLead(
+                        lead.id,
+                        TipoEvento.LEAD_CRIADO,
+                        lead.criado_em,
+                        {"canal": lead.canal.value, "remetente_id": lead.remetente_id},
+                    )
+                ]
+            )
         return lead
 
     async def _obter_ou_abrir_conversa(self, lead: Lead) -> Conversa:
@@ -158,6 +181,16 @@ class ProcessarMensagemRecebida:
                 for c in resposta.chamadas
             ],
         }
+        q = resposta.qualificacao
+        if q is not None:
+            metadados["qualificacao"] = {
+                "intencao": q.intencao_atual,
+                "campos_faltantes": list(resposta.campos_faltantes),
+                "score": q.score.pontos if q.score else None,
+                "proxima_acao": q.proxima_acao,
+            }
+        if resposta.metadados:
+            metadados["agente"] = resposta.metadados
         if invalidos:
             metadados["codigos_invalidos"] = invalidos
         if fallback:

@@ -58,6 +58,8 @@ def url_banco_teste() -> str:
 async def sessoes(url_banco_teste: str) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     engine = criar_engine(url_banco_teste)
     async with engine.begin() as conn:
-        await conn.execute(text("TRUNCATE imoveis, leads, conversas, mensagens CASCADE"))
+        await conn.execute(
+            text("TRUNCATE imoveis, leads, conversas, mensagens, lead_eventos CASCADE")
+        )
     yield criar_fabrica_sessao(engine)
     await engine.dispose()
