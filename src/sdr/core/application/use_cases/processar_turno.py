@@ -4,8 +4,8 @@
 2. Agrega as mensagens PENDENTES em ordem e executa o agente UMA vez.
 3. Se chegaram mensagens novas enquanto o agente pensava (resposta ainda não enviada),
    descarta a resposta e reprocessa com tudo.
-4. Persiste a resposta, marca o lote como PROCESSADO, grava qualificação/eventos e
-   entrega pelo CanalMensagemPort do canal do lead.
+4. Persiste a resposta, marca o lote como PROCESSADO, grava qualificação, negociação de
+   agenda e eventos, e entrega pelo CanalMensagemPort do canal do lead.
 """
 
 import logging
@@ -146,8 +146,13 @@ class ProcessarTurno:
         conversa = conversa.tocar(enviada.criada_em)
         await self._conversas.salvar(conversa)
 
-        if resposta.qualificacao is not None and resposta.qualificacao != lead.qualificacao:
-            lead = replace(lead, qualificacao=resposta.qualificacao)
+        atualizado = lead
+        if resposta.qualificacao is not None:
+            atualizado = replace(atualizado, qualificacao=resposta.qualificacao)
+        if resposta.agenda is not None:
+            atualizado = replace(atualizado, agenda=resposta.agenda)
+        if atualizado != lead:
+            lead = atualizado
             await self._leads.salvar(lead)
         await self._eventos.registrar(resposta.eventos)
 

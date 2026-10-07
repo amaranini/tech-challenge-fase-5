@@ -48,6 +48,7 @@ CAMPOS = {
     "aceita_pets": "Pets",
 }
 CAMPOS_EM_REAIS = {"preco_max", "aluguel_max", "ticket"}
+DIAS = ("seg", "ter", "qua", "qui", "sex", "sáb", "dom")
 
 
 def md(texto: object) -> str:
@@ -96,9 +97,29 @@ def descrever_evento(evento: dict[str, Any]) -> str:
             texto = f"**lead qualificado** → {p.get('proxima_acao')}"
         case "LeadCriado":
             texto = "lead criado"
+        case "AgendamentoCriado":
+            quem = f"{p.get('responsavel_nome')} ({p.get('responsavel_titulo')})"
+            texto = (
+                f"📅 **agendado**: {formatar_horario(p.get('inicio'))} com {quem}"
+                f" · {formatar_valor('modalidade', p.get('modalidade'))}"
+            )
+        case "AgendamentoRemarcado":
+            de = formatar_horario(p.get("inicio_anterior"))
+            texto = f"📅 **remarcado**: {de} → {formatar_horario(p.get('inicio'))}"
+        case "AgendamentoCancelado":
+            texto = f"📅 **cancelado**: {formatar_horario(p.get('inicio'))}"
         case outro:
             texto = str(outro)
     return texto
+
+
+def formatar_horario(iso: object) -> str:
+    """ISO 8601 → "qui 08/10 14h" no fuso local de quem vê."""
+    try:
+        momento = datetime.fromisoformat(str(iso)).astimezone()
+    except ValueError:
+        return str(iso)
+    return f"{DIAS[momento.weekday()]} {momento:%d/%m %Hh%M}".removesuffix("00")
 
 
 def api_get(caminho: str, **params: Any) -> Any:

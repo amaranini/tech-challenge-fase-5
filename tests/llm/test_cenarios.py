@@ -64,8 +64,13 @@ def test_cenario(cenario: Cenario) -> None:
     lead_id = f"llm-{cenario.nome[:20]}-{uuid.uuid4().hex[:6]}"
     print(f"\n=== {cenario.nome} ({lead_id}) — {cenario.descricao}")
 
-    for fala in cenario.falas:
-        enviar(lead_id, fala)
+    for numero, fala in enumerate(cenario.falas, start=1):
+        enviar(lead_id, fala.texto)
+        if fala.esperado:
+            erros = divergencias(obter_lead(lead_id), fala.esperado)
+            assert not erros, f"{cenario.arquivo.name}, fala {numero} ({fala.texto!r}):\n- " + (
+                "\n- ".join(erros)
+            )
 
     estado = obter_lead(lead_id)
     print(f"--- estado final\n{_resumo(estado)}")

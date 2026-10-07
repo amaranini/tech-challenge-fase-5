@@ -1,13 +1,22 @@
 {
   "nome": "compra_zona_sul",
-  "descricao": "Exemplo 1 do enunciado: lead quer comprar apartamento na zona sul; a Lia qualifica a compra até a próxima ação agendar_visita.",
+  "descricao": "Exemplo 1 do enunciado: lead quer comprar apartamento na zona sul; a Lia qualifica a compra (agendar_visita), propõe horários e só agenda a visita com o corretor da zona sul depois do 'sim' explícito.",
   "falas": [
     "Estou procurando apartamento na zona sul",
     "Quero comprar",
     "Até uns 800 mil",
     "2 quartos",
     "Quero me mudar nos próximos 2 meses",
-    "Vou financiar e usar meu FGTS"
+    "Vou financiar e usar meu FGTS",
+    {
+      "texto": "Pode ser quinta à tarde?",
+      "esperado": {
+        "eventos_ausentes": [
+          "AgendamentoCriado"
+        ]
+      }
+    },
+    "Sim, pode marcar"
   ],
   "esperado": {
     "intencao": "compra",
@@ -52,10 +61,25 @@
           "intencao": "compra",
           "proxima_acao": "agendar_visita"
         }
+      },
+      {
+        "tipo": "AgendamentoCriado",
+        "payload": {
+          "tipo": "visita_imovel",
+          "modalidade": "presencial",
+          "responsavel_titulo": "corretor da zona sul",
+          "inicio": {
+            "dia_semana": "quinta",
+            "periodo": "tarde"
+          }
+        }
       }
     ],
     "eventos_ausentes": [
       "IntencaoAlterada"
-    ]
+    ],
+    "contagem_eventos": {
+      "AgendamentoCriado": 1
+    }
   }
 }

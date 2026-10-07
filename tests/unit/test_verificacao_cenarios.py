@@ -72,3 +72,22 @@ def test_divergencias_listam_cada_falha() -> None:
         "eventos_ausentes": ["LeadQualificado"],
     }
     assert len(divergencias(ESTADO, esperado)) == 6
+
+
+def test_contagem_de_eventos_e_falas_com_expectativa_intermediaria() -> None:
+    estado = {"eventos": [{"tipo": "AgendamentoCriado", "payload": {}}]}
+    assert divergencias(estado, {"contagem_eventos": {"AgendamentoCriado": 1}}) == []
+    assert divergencias(estado, {"contagem_eventos": {"AgendamentoCriado": 0}}) == [
+        "evento AgendamentoCriado: esperado 0x, obtido 1x"
+    ]
+    compra = next(c for c in carregar_cenarios() if c.nome == "compra_zona_sul")
+    intermediarias = [f for f in compra.falas if f.esperado]
+    assert intermediarias, "o Exemplo 1 confere que nada é reservado antes do 'sim'"
+
+
+def test_confere_dia_da_semana_e_periodo_de_horario_iso() -> None:
+    quinta_15h = "2026-10-08T18:00:00+00:00"  # 15h em São Paulo
+    assert confere(quinta_15h, {"dia_semana": "quinta", "periodo": "tarde"})
+    assert not confere(quinta_15h, {"dia_semana": "terca"})
+    assert not confere(quinta_15h, {"periodo": "manha"})
+    assert not confere("ontem", {"dia_semana": "quinta"})

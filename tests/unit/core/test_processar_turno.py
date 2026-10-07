@@ -1,8 +1,12 @@
 """ProcessarTurno: agregação, reprocessamento, trava, guarda de itens e persistência."""
 
+from datetime import UTC, datetime
+from uuid import uuid4
+
 from sdr.core.application.ports.agente import EntradaAgente
 from sdr.core.application.ports.llm import LLMIndisponivelError
 from sdr.core.application.use_cases.processar_turno import ProcessarTurno
+from sdr.core.domain.agenda import NegociacaoAgenda, Slot
 from sdr.core.domain.agente import Persona, RespostaAgente
 from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem, Papel, StatusMensagem
 from sdr.core.domain.eventos import EventoLead, TipoEvento
@@ -252,3 +256,19 @@ async def test_insistindo_em_codigo_inventado_responde_com_fallback() -> None:
     assert resultado.resposta.texto == "Já te respondo!"
     assert resultado.itens_sugeridos == ()
     assert resultado.resposta.metadados["fallback"] is True
+
+
+async def test_grava_a_negociacao_de_agenda_do_turno() -> None:
+    slot = Slot(
+        uuid4(),
+        uuid4(),
+        datetime(2026, 10, 8, 17, tzinfo=UTC),
+        datetime(2026, 10, 8, 18, tzinfo=UTC),
+    )
+    negociacao = NegociacaoAgenda(ofertados=(slot,))
+    cenario = Cenario(RespostaAgente("Tenho quinta às 14h, pode ser?", agenda=negociacao))
+    cenario.chega("quero agendar")
+
+    await cenario.processar()
+
+    assert cenario.leads.leads[cenario.lead.id].agenda == negociacao

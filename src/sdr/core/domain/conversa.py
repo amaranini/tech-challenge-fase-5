@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
+from sdr.core.domain.agenda import NegociacaoAgenda
 from sdr.core.domain.qualificacao import Qualificacao
 
 
@@ -49,6 +50,7 @@ class Lead:
     criado_em: datetime
     qualificacao: Qualificacao
     nome: str | None = None
+    agenda: NegociacaoAgenda = field(default_factory=NegociacaoAgenda)
 
     @classmethod
     def novo(cls, canal: Canal, remetente_id: str, nome: str | None = None) -> "Lead":

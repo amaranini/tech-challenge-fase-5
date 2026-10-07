@@ -1,7 +1,14 @@
 """AgenteConversacionalPort com LangGraph: roteador → extração → scoring → especialista.
 
     START → roteador ─┬─ (sem intenção) ──────────────→ descoberta ⇄ ferramentas → END
-                      └─ (intenção X) → extração → scoring → especialista ⇄ ferramentas → END
+                      └─ (intenção X) → extração → scoring ─┬→ especialista ⇄ ferramentas → END
+                                                            └→ agenda → responder_agenda
+                                                                        ⇄ ferramentas → END
+
+- agenda: lead qualificado numa intenção com `TipoAgendamento` (ou negociação em curso). O
+  LLM só INTERPRETA a fala (ação + preferência estruturada) e depois REDIGE a resposta; os
+  horários reais, a confirmação e a reserva são do domínio/`ConduzirAgendamento`. Se o lead
+  não quer agendar agora, segue para o especialista sem insistir.
 
 - O core não conhece as intenções: elas vêm da vertical (IntencaoVertical).
 - Os nós só orquestram; as REGRAS (troca de intenção, merge da ficha, faltantes, eventos)
@@ -18,14 +25,28 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, TypedDict, cast
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from sdr.core.adapters.outbound.agent.agenda import (
+    bloco_agenda,
+    ler_interpretacao,
+    prompt_interpretacao,
+    schema_interpretacao,
+)
 from sdr.core.application.ports.agente import EntradaAgente
 from sdr.core.application.ports.ferramenta import Ferramenta, ResultadoFerramenta
 from sdr.core.application.ports.llm import LLMPort, MensagemLLM, PapelLLM
+from sdr.core.application.ports.relogio import RelogioPort
+from sdr.core.application.use_cases.conduzir_agendamento import (
+    ConduzirAgendamento,
+    EntradaAgenda,
+    ResultadoAgenda,
+)
+from sdr.core.domain.agenda import NegociacaoAgenda, TipoAgendamento, TipoDecisao
 from sdr.core.domain.agente import (
     ChamadaFerramentaRegistrada,
     Persona,
@@ -51,6 +72,10 @@ FUSO_PADRAO = ZoneInfo("America/Sao_Paulo")
 PASTA_PROMPTS = Path(__file__).resolve().parent / "prompts"
 PROMPT_ROTEADOR = (PASTA_PROMPTS / "roteador_v1.md").read_text(encoding="utf-8")
 PROMPT_EXTRACAO = (PASTA_PROMPTS / "extracao_v2.md").read_text(encoding="utf-8")
+PROMPT_INTERPRETACAO_AGENDA = (PASTA_PROMPTS / "agenda_interpretacao_v1.md").read_text(
+    encoding="utf-8"
+)
+PROMPT_AGENDAMENTO = (PASTA_PROMPTS / "agendamento_v1.md").read_text(encoding="utf-8")
 AVISO_TROCA_INTENCAO = (
     "\nATENÇÃO: nesta mensagem o lead mudou de intenção ({de} → {para}). Tudo o que ele "
     "disse antes desta mensagem foi para {de}; NÃO use esses valores nesta ficha (campos "
@@ -97,6 +122,10 @@ class EstadoGrafo(TypedDict):
     passos: int
     modelo: str | None
     no_resposta: str
+    # Agenda
+    negociacao: NegociacaoAgenda
+    agenda: ResultadoAgenda | None
+    interpretacao_agenda: dict[str, object]
 
 
 def _transcricao(historico: Sequence[Mensagem], texto: str, janela: int) -> str:
@@ -120,6 +149,33 @@ def _nota_itens_citados(mensagem: Mensagem) -> str | None:
     return "[Contexto interno] Itens apresentados na sua mensagem anterior:\n" + "\n".join(linhas)
 
 
+def sem_repeticao(texto: str) -> str:
+    """Colapsa a resposta que veio duplicada numa única geração (mesmo conteúdo duas vezes
+    seguidas — já visto com o modelo de agente)."""
+    texto = texto.strip()
+    linhas = [" ".join(linha.split()) for linha in texto.splitlines() if linha.strip()]
+    metade = len(linhas) // 2
+    if metade and len(linhas) % 2 == 0 and linhas[:metade] == linhas[metade:]:
+        alvo, vistas = linhas[metade - 1], 0
+        for i, linha in enumerate(texto.splitlines()):
+            if " ".join(linha.split()) == alvo:
+                vistas += 1
+                if vistas == 1:
+                    return "\n".join(texto.splitlines()[: i + 1]).strip()
+    return texto
+
+
+def _itens_citados(historico: Sequence[Mensagem], limite: int = 5) -> tuple[str, ...]:
+    """Ids dos itens do catálogo citados na conversa, do mais recente ao mais antigo."""
+    vistos: dict[str, None] = {}
+    for mensagem in reversed(historico):
+        citados = mensagem.metadados.get("itens_citados")
+        for citado in citados if isinstance(citados, list) else []:
+            if isinstance(citado, dict) and citado.get("id"):
+                vistos.setdefault(str(citado["id"]), None)
+    return tuple(vistos)[:limite]
+
+
 def _descricao_campo(intencao: IntencaoVertical, campo: str) -> str:
     propriedades = intencao.schema.schema_extracao().get("properties", {})
     if isinstance(propriedades, Mapping):
@@ -139,8 +195,12 @@ class AgenteQualificador:
         ferramentas: Sequence[Ferramenta],
         max_passos: int = 4,
         fuso: ZoneInfo = FUSO_PADRAO,
+        agenda: ConduzirAgendamento | None = None,
+        relogio: RelogioPort | None = None,
     ) -> None:
         self._llms = llms
+        self._agenda = agenda
+        self._relogio = relogio
         self._persona = persona
         self._config = qualificacao
         self._intencoes = {i.nome: i for i in qualificacao.intencoes}
@@ -163,6 +223,8 @@ class AgenteQualificador:
         grafo.add_node("especialista", self._no_especialista)  # type: ignore[call-overload]
         grafo.add_node("descoberta", self._no_descoberta)  # type: ignore[call-overload]
         grafo.add_node("ferramentas", self._no_ferramentas)  # type: ignore[call-overload]
+        grafo.add_node("agenda", self._no_agenda)  # type: ignore[call-overload]
+        grafo.add_node("responder_agenda", self._no_responder_agenda)  # type: ignore[call-overload]
 
         grafo.add_edge(START, "roteador")
         grafo.add_conditional_edges(
@@ -171,15 +233,30 @@ class AgenteQualificador:
             {"extracao": "extracao", "descoberta": "descoberta"},
         )
         grafo.add_edge("extracao", "scoring")
-        grafo.add_edge("scoring", "especialista")
-        for no in ("especialista", "descoberta"):
+        grafo.add_conditional_edges(
+            "scoring", self._apos_scoring, {"agenda": "agenda", "especialista": "especialista"}
+        )
+        grafo.add_conditional_edges(
+            "agenda",
+            lambda e: (
+                "especialista"
+                if e["agenda"] is None or e["agenda"].decisao.tipo is TipoDecisao.NAO_INSISTIR
+                else "responder_agenda"
+            ),
+            {"especialista": "especialista", "responder_agenda": "responder_agenda"},
+        )
+        for no in ("especialista", "descoberta", "responder_agenda"):
             grafo.add_conditional_edges(
                 no, self._apos_resposta, {"ferramentas": "ferramentas", END: END}
             )
         grafo.add_conditional_edges(
             "ferramentas",
             lambda e: e["no_resposta"],
-            {"especialista": "especialista", "descoberta": "descoberta"},
+            {
+                "especialista": "especialista",
+                "descoberta": "descoberta",
+                "responder_agenda": "responder_agenda",
+            },
         )
         return grafo.compile()
 
@@ -206,6 +283,9 @@ class AgenteQualificador:
             "passos": 0,
             "modelo": None,
             "no_resposta": "descoberta",
+            "negociacao": entrada.lead.agenda,
+            "agenda": None,
+            "interpretacao_agenda": {},
         }
         final = cast(
             EstadoGrafo,
@@ -213,7 +293,23 @@ class AgenteQualificador:
                 inicial, config={"recursion_limit": 2 * self._max_passos + 10}
             ),
         )
-        texto = final["mensagens"][-1].conteudo.strip() or self._persona.mensagem_fallback
+        texto = sem_repeticao(final["mensagens"][-1].conteudo) or self._persona.mensagem_fallback
+        metadados: dict[str, object] = {
+            "roteamento": final["roteamento"],
+            "no_resposta": final["no_resposta"],
+        }
+        if (agenda := final["agenda"]) is not None:
+            metadados["agenda"] = {
+                **final["interpretacao_agenda"],
+                "decisao": agenda.decisao.tipo.value,
+                "aviso": agenda.decisao.aviso.value if agenda.decisao.aviso else None,
+                "opcoes": [s.inicio.isoformat() for s in agenda.decisao.opcoes],
+                "proposta": (
+                    p.slot.inicio.isoformat()
+                    if (p := agenda.decisao.proposta) is not None and p.slot is not None
+                    else None
+                ),
+            }
         return RespostaAgente(
             texto=texto,
             itens_consultados=unicos_por_id(final["itens"]),
@@ -224,7 +320,8 @@ class AgenteQualificador:
             qualificacao=final["qualificacao"],
             eventos=tuple(final["eventos"]),
             campos_faltantes=tuple(final["campos_faltantes"]),
-            metadados={"roteamento": final["roteamento"], "no_resposta": final["no_resposta"]},
+            agenda=final["negociacao"],
+            metadados=metadados,
         )
 
     # ------------------------------------------------------------------ roteador
@@ -368,6 +465,78 @@ class AgenteQualificador:
             "eventos": eventos,
         }
 
+    # ------------------------------------------------------------------ agenda
+    def _apos_scoring(self, estado: EstadoGrafo) -> str:
+        q = estado["qualificacao"]
+        if self._agenda is None or self._agenda.tipo_para(q.intencao_atual) is None:
+            return "especialista"
+        negociacao = estado["negociacao"]
+        em_curso = negociacao.proposta is not None or bool(negociacao.ofertados)
+        return "agenda" if q.proxima_acao or em_curso else "especialista"
+
+    async def _no_agenda(self, estado: EstadoGrafo) -> dict[str, object]:
+        conduzir = cast(ConduzirAgendamento, self._agenda)
+        q = estado["qualificacao"]
+        intencao = cast(str, q.intencao_atual)
+        tipo = cast(TipoAgendamento, conduzir.tipo_para(intencao))
+        lead_id = UUID(estado["lead_id"])
+        negociacao = estado["negociacao"]
+        ativo = await conduzir.agendamento_ativo(lead_id)
+
+        sistema = prompt_interpretacao(
+            PROMPT_INTERPRETACAO_AGENDA,
+            tipo,
+            negociacao,
+            ativo,
+            self._agora().astimezone(conduzir.fuso),
+        )
+        transcricao = _transcricao(
+            estado["historico"], estado["texto"], self._config.janela_extracao
+        )
+        resposta = await self._llms.extracao.gerar_estruturado(
+            [MensagemLLM(PapelLLM.SISTEMA, sistema), MensagemLLM(PapelLLM.USUARIO, transcricao)],
+            schema_interpretacao(tipo),
+            "interpretacao_agenda",
+        )
+        interpretacao = ler_interpretacao(resposta.dados, tipo)
+        resultado = await conduzir.executar(
+            EntradaAgenda(
+                lead_id=lead_id,
+                intencao=intencao,
+                ficha=q.ficha,
+                negociacao=negociacao,
+                interpretacao=interpretacao,
+                ativo=ativo,
+                itens=_itens_citados(estado["historico"]),
+            )
+        )
+        return {
+            "agenda": resultado,
+            "negociacao": resultado.decisao.negociacao,
+            "eventos": list(resultado.eventos),
+            "interpretacao_agenda": {
+                "acao": interpretacao.acao.value,
+                "opcao": interpretacao.opcao,
+                "modalidade": interpretacao.modalidade,
+            },
+            "tokens_entrada": resposta.tokens_entrada,
+            "tokens_saida": resposta.tokens_saida,
+        }
+
+    async def _no_responder_agenda(self, estado: EstadoGrafo) -> dict[str, object]:
+        novas: list[MensagemLLM] = []
+        if not estado["mensagens"]:
+            novas = self._contexto(estado, PROMPT_AGENDAMENTO, self._bloco_agenda(estado))
+        return await self._chamar_agente(estado, novas, "responder_agenda")
+
+    def _bloco_agenda(self, estado: EstadoGrafo) -> str:
+        fuso = cast(ConduzirAgendamento, self._agenda).fuso
+        hoje = self._agora().astimezone(fuso).date()
+        return bloco_agenda(cast(ResultadoAgenda, estado["agenda"]), fuso, hoje)
+
+    def _agora(self) -> datetime:
+        return self._relogio.agora() if self._relogio else datetime.now(self._fuso)
+
     # ------------------------------------------------------------------ resposta
     async def _no_especialista(self, estado: EstadoGrafo) -> dict[str, object]:
         novas: list[MensagemLLM] = []
@@ -412,7 +581,7 @@ class AgenteQualificador:
     def _contexto(
         self, estado: EstadoGrafo, prompt_no: str, bloco_estado: str | None
     ) -> list[MensagemLLM]:
-        momento = datetime.now(self._fuso)
+        momento = self._agora().astimezone(self._fuso)
         mensagens = [
             MensagemLLM(PapelLLM.SISTEMA, f"{self._persona.prompt_sistema}\n\n{prompt_no}"),
             MensagemLLM(
@@ -455,7 +624,13 @@ class AgenteQualificador:
                 "AGORA, antes de responder, e apresente até 3. Mesmo mostrando opções, termine "
                 "com UMA única pergunta."
             )
-        if q.proxima_acao:
+        if q.proxima_acao and estado["negociacao"].recusou:
+            linhas.append(
+                f"Lead QUALIFICADO (próxima ação: {q.proxima_acao}), mas disse que não quer "
+                "agendar agora: NÃO insista. Ajude no que ele pedir; se ele mudar de ideia, "
+                "é só dizer."
+            )
+        elif q.proxima_acao:
             # Qualificado: o objetivo vira a próxima ação; não se pergunta mais nada da ficha.
             linhas.append(
                 f"Lead QUALIFICADO. Próxima ação: {q.proxima_acao}. Sua ÚNICA pergunta nesta "

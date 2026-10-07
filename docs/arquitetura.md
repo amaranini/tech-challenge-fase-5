@@ -11,7 +11,9 @@ Este documento descreve como o sistema é organizado. Ele se apoia em três deci
 - **grafo genérico de qualificação (roteador, extração, scoring, especialistas):**
   [ADR 005](adr/005-grafo-qualificacao-multiagente.md);
 - **turnos assíncronos com agregação de mensagens (debounce):**
-  [ADR 006](adr/006-processamento-assincrono-debounce.md).
+  [ADR 006](adr/006-processamento-assincrono-debounce.md);
+- **agendamento (AgendaPort, mock em Postgres, nó de agenda no grafo):**
+  [ADR 007](adr/007-agendamento-agenda-mock.md).
 
 ## 1. Contexto
 
@@ -97,13 +99,13 @@ flowchart TB
             http[http — app FastAPI<br/>/health · /conversas · /leads · /leads/&#123;id&#125;]
         end
         subgraph capp[application — sem frameworks]
-            cuc[use_cases<br/>ReceberMensagem · ProcessarTurno · ObterHistorico<br/>ListarLeads · ObterLead · RecuperarTurnosPendentes · VerificarSaude]
-            cports{{ports<br/>CatalogoPort · EmbeddingPort · LLMPort · Ferramenta<br/>LeadRepository · ConversaRepository · LeadEventoRepository<br/>AgenteConversacionalPort · AgendadorTurnoPort · TravaTurnoPort · CanalMensagemPort}}
+            cuc[use_cases<br/>ReceberMensagem · ProcessarTurno · ObterHistorico<br/>ListarLeads · ObterLead · RecuperarTurnosPendentes · VerificarSaude<br/>ConduzirAgendamento]
+            cports{{ports<br/>CatalogoPort · EmbeddingPort · LLMPort · Ferramenta<br/>LeadRepository · ConversaRepository · LeadEventoRepository<br/>AgenteConversacionalPort · AgendadorTurnoPort · TravaTurnoPort · CanalMensagemPort<br/>AgendaPort · RelogioPort}}
             cferr[ferramentas<br/>FerramentaBuscarCatalogo]
         end
-        cdom[domain — sem frameworks<br/>Lead · Conversa · Mensagem · Persona · ItemCatalogo<br/>Qualificacao · Score · EventoLead · Agendamento*]
+        cdom[domain — sem frameworks<br/>Lead · Conversa · Mensagem · Persona · ItemCatalogo<br/>Qualificacao · Score · EventoLead<br/>Responsavel · Slot · Agendamento · NegociacaoAgenda]
         subgraph cout[adapters/outbound]
-            persist[persistence<br/>engine · Base ORM · leads/conversas/mensagens/lead_eventos]
+            persist[persistence<br/>engine · Base ORM · leads/conversas/mensagens/lead_eventos<br/>AgendaPostgres — mock: responsaveis/slots_agenda/agendamentos]
             emb[embeddings<br/>fastembed]
             llm[llm — OpenAI]
             agent[agent — LangGraph<br/>AgenteQualificador]
@@ -227,7 +229,7 @@ Os próximos fluxos seguem o mesmo desenho: o router só traduz HTTP ↔ caso de
 de um lead, venha do chat web ou do WhatsApp, vira um `MensagemRecebida` e entra no mesmo
 `ReceberMensagem`, do core.
 
-## 6. Grafo de qualificação (um turno)
+## 6. Grafo de qualificação e agendamento (um turno)
 
 ```mermaid
 flowchart TD
@@ -237,15 +239,38 @@ flowchart TD
     D -- "intenção X (nova, mantida ou trocada)" --> EX["extração<br/>LLM_MODEL_EXTRACTION · schema da intenção X"]
     EX --> M["SchemaFicha.validar (vertical)<br/>+ Qualificacao.aplicar_extracao (merge)"]
     M --> SC["RegrasQualificacao.pontuar / qualificado (vertical)<br/>+ Qualificacao.aplicar_score · campos_faltantes"]
-    SC --> ESP["especialista X<br/>LLM_MODEL_AGENT · persona + prompt X<br/>+ bloco de estado (próximo campo, score, próxima ação)"]
+    SC -- "não qualificado" --> ESP["especialista X<br/>LLM_MODEL_AGENT · persona + prompt X<br/>+ bloco de estado (próximo campo, score, próxima ação)"]
+    SC -- "qualificado e X tem TipoAgendamento<br/>(ou negociação em curso)" --> AG["agenda<br/>LLM interpreta a fala (ação + preferência)<br/>→ ConduzirAgendamento: RegraAtribuicao (vertical)<br/>+ AgendaPort.listar_disponibilidade + decidir (domínio)<br/>+ reservar/remarcar/cancelar só após o 'sim'"]
+    AG -- "lead não quer agendar agora" --> ESP
+    AG --> RA["responder_agenda<br/>persona + prompt de agenda<br/>+ bloco com os horários REAIS"]
     ESP <-- "tool calls" --> T["ferramentas<br/>buscar_imoveis → CatalogoPort"]
     DESC <-- "tool calls" --> T
-    ESP --> FIM([texto + Qualificacao + eventos])
+    RA <-- "tool calls" --> T
+    ESP --> FIM([texto + Qualificacao + negociação de agenda + eventos])
     DESC --> FIM
+    RA --> FIM
 ```
 
-O caso de uso grava a mensagem da Lia, o `Lead` (colunas e fichas JSONB) e os eventos em
-`lead_eventos`. O grafo não persiste nada.
+O caso de uso grava a mensagem da Lia, o `Lead` e os eventos em `lead_eventos`. No `Lead`
+entram as colunas, as fichas JSONB e a negociação de agenda (`leads.agenda`). O grafo só
+escreve na agenda, pelo `AgendaPort`, e somente depois da confirmação explícita do lead
+([ADR 007](adr/007-agendamento-agenda-mock.md)).
+
+### Negociação de horário (domínio `decidir`)
+
+```mermaid
+stateDiagram-v2
+    [*] --> SemProposta
+    SemProposta --> Ofertado: oferece 2–3 horários reais
+    Ofertado --> AguardandoConfirmacao: lead indica horário ("quinta à tarde", "a 2ª")
+    SemProposta --> AguardandoConfirmacao: lead já indica horário
+    AguardandoConfirmacao --> AguardandoConfirmacao: falta modalidade / assunto paralelo
+    AguardandoConfirmacao --> Ofertado: lead recusa · slot tomado (alternativas)
+    AguardandoConfirmacao --> Agendado: "sim" ⇒ AgendaPort.reservar (idempotente)
+    Agendado --> AguardandoConfirmacao: remarcar / cancelar (sempre confirma)
+    Agendado --> SemProposta: cancelado
+    SemProposta --> NaoInsistir: lead não quer agendar agora
+```
 
 ## 7. Mensagens do lead → turno → resposta da Lia (assíncrono, [ADR 006](adr/006-processamento-assincrono-debounce.md))
 

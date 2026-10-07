@@ -16,6 +16,9 @@ class TipoEvento(StrEnum):
     CAMPO_REMOVIDO = "CampoQualificacaoRemovido"
     SCORE_ALTERADO = "ScoreAlterado"
     LEAD_QUALIFICADO = "LeadQualificado"
+    AGENDAMENTO_CRIADO = "AgendamentoCriado"
+    AGENDAMENTO_REMARCADO = "AgendamentoRemarcado"
+    AGENDAMENTO_CANCELADO = "AgendamentoCancelado"
 
 
 @dataclass(frozen=True)

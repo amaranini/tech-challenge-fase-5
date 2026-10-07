@@ -40,6 +40,19 @@ class Settings(BaseSettings):
     router_confianca_min: float = 0.6  # abaixo disso, não troca de intenção
     extracao_janela_mensagens: int = 6  # mensagens recentes lidas por roteador/extração
 
+    # Operação (vale para qualquer vertical)
+    fuso_operacao: str = "America/Sao_Paulo"
+
+    # Agenda: o que pode ser oferecido ao lead
+    agenda_antecedencia_horas: float = 2.0  # não oferece horário mais próximo que isso
+    agenda_janela_dias: int = 14  # oferece horários até N dias corridos à frente
+    agenda_sugestoes: int = 3  # quantos horários propor por vez
+    # Agenda mock (Postgres): grade de slots gerada no start e no `seed`
+    agenda_mock_dias_uteis: int = 10
+    agenda_mock_hora_inicio: int = 9
+    agenda_mock_hora_fim: int = 20  # último slot termina neste horário
+    agenda_mock_duracao_min: int = 60
+
 
 @lru_cache
 def obter_settings() -> Settings:

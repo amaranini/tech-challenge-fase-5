@@ -4,6 +4,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
+from sdr.core.domain.agenda import NegociacaoAgenda
 from sdr.core.domain.catalogo import ItemCatalogo
 from sdr.core.domain.eventos import EventoLead
 from sdr.core.domain.qualificacao import Qualificacao
@@ -50,6 +51,7 @@ class RespostaAgente:
     qualificacao: Qualificacao | None = None  # estado após o turno (None = inalterado)
     eventos: tuple[EventoLead, ...] = ()  # eventos de domínio emitidos no turno
     campos_faltantes: tuple[str, ...] = ()
+    agenda: NegociacaoAgenda | None = None  # negociação de horário (None = inalterada)
     metadados: dict[str, object] = field(default_factory=dict)
 
 

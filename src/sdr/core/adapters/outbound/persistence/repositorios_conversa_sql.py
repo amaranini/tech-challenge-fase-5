@@ -1,4 +1,6 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select, update
@@ -12,6 +14,7 @@ from sdr.core.adapters.outbound.persistence.modelos import (
     MensagemModel,
 )
 from sdr.core.application.ports.repositorios import ResumoLead
+from sdr.core.domain.agenda import NegociacaoAgenda, Operacao, Proposta, Slot
 from sdr.core.domain.conversa import (
     Canal,
     Conversa,
@@ -39,6 +42,63 @@ def _qualificacao(m: LeadModel) -> Qualificacao:
     )
 
 
+def _slot_para_json(slot: Slot) -> dict[str, str]:
+    return {
+        "id": str(slot.id),
+        "responsavel_id": str(slot.responsavel_id),
+        "inicio": slot.inicio.isoformat(),
+        "fim": slot.fim.isoformat(),
+    }
+
+
+def _slot_de_json(dados: Mapping[str, Any]) -> Slot:
+    return Slot(
+        id=UUID(dados["id"]),
+        responsavel_id=UUID(dados["responsavel_id"]),
+        inicio=datetime.fromisoformat(dados["inicio"]),
+        fim=datetime.fromisoformat(dados["fim"]),
+    )
+
+
+def negociacao_para_json(negociacao: NegociacaoAgenda) -> dict[str, Any]:
+    if negociacao == NegociacaoAgenda():
+        return {}
+    p = negociacao.proposta
+    return {
+        "ofertados": [_slot_para_json(s) for s in negociacao.ofertados],
+        "proposta": None
+        if p is None
+        else {
+            "operacao": p.operacao.value,
+            "slot": _slot_para_json(p.slot) if p.slot else None,
+            "modalidade": p.modalidade,
+            "agendamento_id": str(p.agendamento_id) if p.agendamento_id else None,
+        },
+        "recusou": negociacao.recusou,
+    }
+
+
+def negociacao_de_json(dados: Mapping[str, Any] | None) -> NegociacaoAgenda:
+    if not dados:
+        return NegociacaoAgenda()
+    p = dados.get("proposta")
+    proposta = (
+        None
+        if not p
+        else Proposta(
+            operacao=Operacao(p["operacao"]),
+            slot=_slot_de_json(p["slot"]) if p.get("slot") else None,
+            modalidade=p.get("modalidade"),
+            agendamento_id=UUID(p["agendamento_id"]) if p.get("agendamento_id") else None,
+        )
+    )
+    return NegociacaoAgenda(
+        ofertados=tuple(_slot_de_json(s) for s in dados.get("ofertados", [])),
+        proposta=proposta,
+        recusou=bool(dados.get("recusou", False)),
+    )
+
+
 def _lead(m: LeadModel) -> Lead:
     return Lead(
         id=m.id,
@@ -47,6 +107,7 @@ def _lead(m: LeadModel) -> Lead:
         criado_em=m.criado_em,
         qualificacao=_qualificacao(m),
         nome=m.nome,
+        agenda=negociacao_de_json(m.agenda),
     )
 
 
@@ -102,6 +163,7 @@ class LeadRepositorySql:
             "score_motivos": list(q.score.motivos) if q.score else [],
             "proxima_acao": q.proxima_acao,
             "qualificado_em": q.qualificado_em,
+            "agenda": negociacao_para_json(lead.agenda),
         }
         stmt = insert(LeadModel).values(
             id=lead.id,

@@ -8,6 +8,8 @@ import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -23,6 +25,7 @@ from sdr.core.adapters.outbound.agent.agente_qualificador import (
 from sdr.core.adapters.outbound.canais.canal_web import CanalWeb
 from sdr.core.adapters.outbound.embeddings.fastembed_adapter import EmbeddingFastembed
 from sdr.core.adapters.outbound.llm.openai_adapter import LLMOpenAI
+from sdr.core.adapters.outbound.persistence.agenda_postgres import AgendaPostgres
 from sdr.core.adapters.outbound.persistence.database import criar_engine, criar_fabrica_sessao
 from sdr.core.adapters.outbound.persistence.repositorios_conversa_sql import (
     ConversaRepositorySql,
@@ -33,8 +36,10 @@ from sdr.core.adapters.outbound.persistence.trava_turno_postgres import TravaTur
 from sdr.core.adapters.outbound.persistence.verificador_saude_postgres import (
     VerificadorSaudePostgres,
 )
+from sdr.core.adapters.outbound.relogio import RelogioSistema
 from sdr.core.adapters.outbound.turnos.agendador_debounce import AgendadorDebounce
 from sdr.core.application.ports.llm import LLMPort
+from sdr.core.application.use_cases.conduzir_agendamento import ConduzirAgendamento
 from sdr.core.application.use_cases.consultar_conversas import (
     ListarLeads,
     ObterHistorico,
@@ -84,6 +89,23 @@ class Container:
     obter_historico: ObterHistorico
     listar_leads: ListarLeads
     obter_lead: ObterLead
+    agenda: AgendaPostgres
+    relogio: RelogioSistema
+    settings: Settings
+
+    async def semear_agenda(self) -> int:
+        """Mock: garante os responsáveis da vertical e a grade dos próximos dias úteis."""
+        s = self.settings
+        fuso = ZoneInfo(s.fuso_operacao)
+        return await self.agenda.semear(
+            self.vertical.responsaveis_iniciais,
+            inicio=self.relogio.agora().astimezone(fuso).date(),
+            dias=s.agenda_mock_dias_uteis,
+            hora_inicio=s.agenda_mock_hora_inicio,
+            hora_fim=s.agenda_mock_hora_fim,
+            duracao_min=s.agenda_mock_duracao_min,
+            fuso=fuso,
+        )
 
     async def encerrar(self) -> None:
         await self.agendador.encerrar()
@@ -116,6 +138,21 @@ def montar_container(settings: Settings | None = None) -> Container:
 
     leads, conversas = LeadRepositorySql(sessoes), ConversaRepositorySql(sessoes)
     eventos = LeadEventoRepositorySql(sessoes)
+    relogio = RelogioSistema()
+    fuso = ZoneInfo(settings.fuso_operacao)
+    agenda = AgendaPostgres(sessoes)
+    conduzir_agendamento = None
+    if vertical.tipos_agendamento and vertical.regra_atribuicao is not None:
+        conduzir_agendamento = ConduzirAgendamento(
+            agenda,
+            vertical.regra_atribuicao,
+            vertical.tipos_agendamento,
+            relogio,
+            fuso=fuso,
+            antecedencia=timedelta(hours=settings.agenda_antecedencia_horas),
+            janela=timedelta(days=settings.agenda_janela_dias),
+            sugestoes=settings.agenda_sugestoes,
+        )
     llms = LLMsPorNo(
         roteador=criar_llm(settings, settings.llm_model_router or settings.llm_modelo),
         extracao=criar_llm(settings, settings.llm_model_extraction or settings.llm_modelo),
@@ -133,6 +170,9 @@ def montar_container(settings: Settings | None = None) -> Container:
         ),
         ferramentas=vertical.ferramentas,
         max_passos=settings.agente_max_passos,
+        fuso=fuso,
+        agenda=conduzir_agendamento,
+        relogio=relogio,
     )
 
     agendador = AgendadorDebounce(settings.debounce_segundos, settings.debounce_max_segundos)
@@ -163,6 +203,9 @@ def montar_container(settings: Settings | None = None) -> Container:
         obter_historico=ObterHistorico(leads, conversas),
         listar_leads=ListarLeads(leads),
         obter_lead=ObterLead(leads, eventos, vertical.intencoes),
+        agenda=agenda,
+        relogio=relogio,
+        settings=settings,
     )
 
 
@@ -173,6 +216,10 @@ def criar_aplicacao(settings: Settings | None = None) -> FastAPI:
 
     async def aquecer_embedding() -> None:
         await asyncio.to_thread(container.embedding.carregar)
+
+    async def semear_agenda() -> None:
+        if criados := await container.semear_agenda():
+            logging.getLogger(__name__).info("Agenda mock: %d slot(s) novo(s)", criados)
 
     async def recuperar_turnos() -> None:
         if total := await container.recuperar_turnos.executar():
@@ -189,6 +236,7 @@ def criar_aplicacao(settings: Settings | None = None) -> FastAPI:
         routers=container.vertical.routers,
         ao_iniciar=[
             *([aquecer_embedding] if settings.embedding_carregar_no_inicio else []),
+            semear_agenda,
             recuperar_turnos,
         ],
         ao_encerrar=[container.encerrar],

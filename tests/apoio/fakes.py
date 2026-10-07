@@ -6,7 +6,9 @@ import re
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from uuid import UUID
+from datetime import date, datetime, time, timedelta
+from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 from sdr.core.application.ports.agente import EntradaAgente
 from sdr.core.application.ports.llm import (
@@ -17,6 +19,14 @@ from sdr.core.application.ports.llm import (
     RespostaLLM,
 )
 from sdr.core.application.ports.repositorios import ResumoLead
+from sdr.core.domain.agenda import (
+    Agendamento,
+    PedidoReserva,
+    Responsavel,
+    Slot,
+    SlotIndisponivelError,
+    StatusAgendamento,
+)
 from sdr.core.domain.agente import RespostaAgente
 from sdr.core.domain.catalogo import (
     ConsultaCatalogo,
@@ -265,3 +275,136 @@ class CanalFake:
         self, lead: Lead, template: str, variaveis: Mapping[str, str]
     ) -> None:
         raise AssertionError("template não esperado")
+
+
+# ---------------------------------------------------------------- agenda
+
+FUSO_SP = ZoneInfo("America/Sao_Paulo")
+
+
+class RelogioFake:
+    def __init__(self, momento: datetime) -> None:
+        self.momento = momento
+
+    def agora(self) -> datetime:
+        return self.momento
+
+    def avancar(self, **delta: float) -> None:
+        self.momento += timedelta(**delta)
+
+
+def grade(
+    responsaveis: Sequence[Responsavel],
+    dias: Sequence[date],
+    horas: Sequence[int] = (9, 10, 11, 14, 15, 16, 18, 19),
+    fuso: ZoneInfo = FUSO_SP,
+) -> list[Slot]:
+    return [
+        Slot(
+            uuid4(),
+            r.id,
+            datetime.combine(d, time(h), fuso),
+            datetime.combine(d, time(h), fuso) + timedelta(hours=1),
+        )
+        for d in dias
+        for r in responsaveis
+        for h in horas
+    ]
+
+
+class AgendaFake:
+    """AgendaPort em memória, com a mesma semântica do mock em Postgres."""
+
+    def __init__(self, responsaveis: Sequence[Responsavel], slots: Sequence[Slot]) -> None:
+        self.responsaveis = {r.id: r for r in responsaveis}
+        self.slots = {s.id: s for s in slots}
+        self.ocupados: dict[UUID, UUID | None] = {}  # slot → agendamento (None = externo)
+        self.agendamentos: dict[UUID, Agendamento] = {}
+        self.por_chave: dict[str, UUID] = {}
+        self.chamadas: list[str] = []
+
+    def ocupar_por_fora(self, slot_id: UUID) -> None:
+        """Outro lead (ou compromisso externo) toma o slot."""
+        self.ocupados[slot_id] = None
+
+    async def listar_responsaveis(self) -> list[Responsavel]:
+        return list(self.responsaveis.values())
+
+    async def listar_disponibilidade(
+        self, responsavel_ids: Sequence[UUID], inicio: datetime, fim: datetime
+    ) -> list[Slot]:
+        return sorted(
+            (
+                s
+                for s in self.slots.values()
+                if s.responsavel_id in responsavel_ids
+                and inicio <= s.inicio < fim
+                and s.id not in self.ocupados
+            ),
+            key=lambda s: s.inicio,
+        )
+
+    def _ocupar(self, slot_id: UUID, agendamento_id: UUID) -> Slot:
+        if slot_id in self.ocupados or slot_id not in self.slots:
+            raise SlotIndisponivelError(str(slot_id))
+        self.ocupados[slot_id] = agendamento_id
+        return self.slots[slot_id]
+
+    async def reservar(self, pedido: PedidoReserva) -> Agendamento:
+        self.chamadas.append("reservar")
+        if pedido.chave_idempotencia in self.por_chave:
+            return self.agendamentos[self.por_chave[pedido.chave_idempotencia]]
+        novo_id = uuid4()
+        slot = self._ocupar(pedido.slot_id, novo_id)
+        agendamento = Agendamento(
+            id=novo_id,
+            lead_id=pedido.lead_id,
+            responsavel=self.responsaveis[slot.responsavel_id],
+            slot_id=slot.id,
+            inicio=slot.inicio,
+            fim=slot.fim,
+            tipo=pedido.tipo,
+            modalidade=pedido.modalidade,
+            status=StatusAgendamento.ATIVO,
+            criado_em=slot.inicio,
+            itens=pedido.itens,
+        )
+        self.agendamentos[novo_id] = agendamento
+        self.por_chave[pedido.chave_idempotencia] = novo_id
+        return agendamento
+
+    async def remarcar(
+        self, agendamento_id: UUID, novo_slot_id: UUID, modalidade: str
+    ) -> Agendamento:
+        self.chamadas.append("remarcar")
+        atual = self.agendamentos[agendamento_id]
+        if atual.slot_id != novo_slot_id:
+            slot = self._ocupar(novo_slot_id, agendamento_id)
+            self.ocupados.pop(atual.slot_id, None)
+            atual = replace(
+                atual,
+                slot_id=slot.id,
+                inicio=slot.inicio,
+                fim=slot.fim,
+                responsavel=self.responsaveis[slot.responsavel_id],
+            )
+        atual = replace(atual, modalidade=modalidade)
+        self.agendamentos[agendamento_id] = atual
+        return atual
+
+    async def cancelar(self, agendamento_id: UUID) -> Agendamento:
+        self.chamadas.append("cancelar")
+        atual = self.agendamentos[agendamento_id]
+        if atual.status is not StatusAgendamento.CANCELADO:
+            self.ocupados.pop(atual.slot_id, None)
+            atual = replace(atual, status=StatusAgendamento.CANCELADO)
+            self.agendamentos[agendamento_id] = atual
+        return atual
+
+    async def agendamento_ativo(self, lead_id: UUID, a_partir_de: datetime) -> Agendamento | None:
+        ativos = [
+            a
+            for a in self.agendamentos.values()
+            if a.lead_id == lead_id and a.status is StatusAgendamento.ATIVO and a.fim > a_partir_de
+        ]
+        return min(ativos, key=lambda a: a.inicio) if ativos else None

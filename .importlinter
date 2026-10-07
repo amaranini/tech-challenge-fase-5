@@ -39,12 +39,13 @@ layers =
 
 # 4. Hexágono de cada fatia da vertical + pack no topo da vertical.
 [importlinter:contract:camadas-vertical-imobiliario]
-name = Vertical imobiliária (pack <- config | catalogo | persona | qualificacao)
+name = Vertical imobiliária (pack <- agenda <- config | catalogo | persona | qualificacao)
 type = layers
 containers =
     sdr.verticals.imobiliario
 layers =
     pack
+    agenda
     config | catalogo | persona | qualificacao
 
 [importlinter:contract:camadas-fatias-imobiliario]
@@ -55,6 +56,15 @@ containers =
 layers =
     adapters
     application
+    domain
+
+[importlinter:contract:camadas-agenda-imobiliario]
+name = Fatia de agenda imobiliária (domain <- adapters)
+type = layers
+containers =
+    sdr.verticals.imobiliario.agenda
+layers =
+    adapters
     domain
 
 [importlinter:contract:camadas-qualificacao-imobiliario]
@@ -76,6 +86,7 @@ source_modules =
     sdr.verticals.imobiliario.catalogo.domain
     sdr.verticals.imobiliario.catalogo.application
     sdr.verticals.imobiliario.qualificacao.domain
+    sdr.verticals.imobiliario.agenda.domain
 forbidden_modules =
     fastapi
     starlette

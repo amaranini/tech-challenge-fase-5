@@ -14,7 +14,8 @@ from sdr.bootstrap import montar_container
 
 
 async def _seed() -> None:
-    """Carrega o catálogo inicial da vertical ativa (idempotente: upsert + reindexa)."""
+    """Carrega o catálogo inicial da vertical ativa (idempotente: upsert + reindexa) e a
+    agenda mock (responsáveis + grade dos próximos dias úteis)."""
     container = montar_container()
     try:
         inicio = time.perf_counter()
@@ -22,6 +23,8 @@ async def _seed() -> None:
         logging.info(
             "%d itens carregados e indexados em %.1fs", total, time.perf_counter() - inicio
         )
+        slots = await container.semear_agenda()
+        logging.info("Agenda mock: responsáveis garantidos, %d slot(s) novo(s)", slots)
     finally:
         await container.encerrar()
 

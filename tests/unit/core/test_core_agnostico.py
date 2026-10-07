@@ -12,7 +12,9 @@ import pytest
 import sdr.core
 
 RAIZ_CORE = Path(sdr.core.__file__).parent
-VOCABULARIO_DE_VERTICAL = re.compile(r"im[oó]ve(l|is)|imobili|corretor|\bmetr[oô]\b", re.IGNORECASE)
+VOCABULARIO_DE_VERTICAL = re.compile(
+    r"im[oó]ve(l|is)|imobili|corretor|\bmetr[oô]\b|\bvisitas?\b", re.IGNORECASE
+)
 
 
 @pytest.mark.parametrize(
