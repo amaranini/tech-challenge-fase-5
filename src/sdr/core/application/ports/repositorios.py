@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem
+from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem, StatusMensagem
 from sdr.core.domain.eventos import EventoLead
 
 
@@ -16,6 +16,8 @@ class ResumoLead:
 
 
 class LeadRepository(Protocol):
+    async def obter(self, lead_id: UUID) -> Lead | None: ...
+
     async def obter_por_remetente(self, canal: Canal, remetente_id: str) -> Lead | None: ...
 
     async def salvar(self, lead: Lead) -> None:
@@ -34,8 +36,20 @@ class ConversaRepository(Protocol):
 
     async def adicionar_mensagem(self, mensagem: Mensagem) -> None: ...
 
-    async def ultimas_mensagens(self, conversa_id: UUID, limite: int) -> list[Mensagem]:
-        """As `limite` mais recentes, em ordem cronológica."""
+    async def ultimas_mensagens(
+        self, conversa_id: UUID, limite: int, *, incluir_pendentes: bool = False
+    ) -> list[Mensagem]:
+        """As `limite` mais recentes, em ordem cronológica (sem pendentes, por padrão)."""
+        ...
+
+    async def pendentes(self, conversa_id: UUID) -> list[Mensagem]:
+        """Mensagens do lead ainda não respondidas, em ordem cronológica."""
+        ...
+
+    async def marcar_status(self, ids: Sequence[UUID], status: StatusMensagem) -> None: ...
+
+    async def leads_com_pendentes(self) -> list[UUID]:
+        """Para recuperar turnos interrompidos (ex.: reinício do processo)."""
         ...
 
 

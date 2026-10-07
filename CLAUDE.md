@@ -38,18 +38,25 @@ src/sdr/
     application/
       ports/               Protocols: CatalogoPort, EmbeddingPort, VerificadorSaudePort, LLMPort
                            (texto + saída estruturada), AgenteConversacionalPort, Ferramenta,
-                           LeadRepository, ConversaRepository, LeadEventoRepository; depois AgendaPort, CRMPort, CanalMensagemPort
-                           (prevê TEMPLATE fora da janela de 24h do WhatsApp)
+                           LeadRepository, ConversaRepository, LeadEventoRepository,
+                           AgendadorTurnoPort, TravaTurnoPort, CanalMensagemPort (prevê
+                           TEMPLATE fora da janela de 24h do WhatsApp); depois AgendaPort, CRMPort
       ferramentas/         tools genéricas do agente (FerramentaBuscarCatalogo → CatalogoPort)
-      use_cases/           um caso de uso por arquivo: ProcessarMensagemRecebida (entrada única
-                           de todos os canais), ObterHistorico, ListarLeads, VerificarSaude
+      use_cases/           um caso de uso por arquivo: ReceberMensagem (entrada única de todos
+                           os canais: grava PENDENTE e agenda), ProcessarTurno (agrega pendentes,
+                           roda o grafo uma vez, entrega via canal), ObterHistorico,
+                           ListarLeads, RecuperarTurnosPendentes, VerificarSaude
       dto/                 MensagemRecebida normalizada e agnóstica de canal
                            (canal, remetente_id, texto, timestamp, metadados)
     adapters/              infraestrutura GENÉRICA, reaproveitada por qualquer vertical
-      inbound/http/        app FastAPI (registra routers da vertical), /health, /conversas, /leads
+      inbound/http/        app FastAPI (registra routers da vertical), /health, /leads,
+                           POST /conversas/mensagens (202) e GET /conversas/{lead_id}/mensagens
       outbound/persistence/  engine async (SQLAlchemy + psycopg 3), Base ORM compartilhado,
                              leads (fichas JSONB + projeções da qualificação), conversas,
                              mensagens, lead_eventos
+      outbound/persistence/  + trava_turno_postgres.py (advisory lock por lead)
+      outbound/turnos/       AgendadorDebounce (asyncio in-process; produção: fila/Redis)
+      outbound/canais/       CanalWeb (resposta já persistida; front faz polling)
       outbound/embeddings/   fastembed (ONNX) local multilíngue (ADR 002)
       outbound/llm/          LLMOpenAI (Chat Completions + tool calling); provedor via
                              LLM_PROVIDER, modelo via LLM_MODELO (ADR 004)
@@ -80,7 +87,8 @@ src/sdr/
                            pelo registro VERTICAIS e chama pack.montar(infra)
   main.py                  entrypoint ASGI (uvicorn sdr.main:app)
   cli.py                   python -m sdr.cli seed — carga inicial do catálogo da vertical
-web/                       Streamlit (chat + seletor/criação de lead_id) — SOMENTE via API HTTP
+web/                       Streamlit (chat com polling via st.fragment + seletor de lead_id)
+                           — SOMENTE via API HTTP
 worker/                    (Dia 3) processo separado para follow-up
 migrations/                Alembic — histórico ÚNICO para core + verticais
 tests/apoio/               fakes dos ports e fábricas (core e por vertical)
@@ -114,10 +122,17 @@ docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
   - Rotas do core recebem casos de uso via `Dependencias` em `app.state`; rotas da vertical
     são criadas pelo pack já com seus casos de uso (`criar_router(buscar_imoveis)`).
   - Instanciar adapters: só no `bootstrap.py` (infra do core) e no `pack.py` (da vertical).
+- **Turnos assíncronos (ADR 006)**
+  - Chat web e WhatsApp entram pelo **mesmo caso de uso** (`ReceberMensagem`): grava como
+    PENDENTE, agenda e retorna (web: HTTP 202). A resposta NUNCA volta no recebimento.
+  - `ProcessarTurno` agrega as pendentes do lead e roda o grafo uma vez; mensagem que chega
+    antes do envio ⇒ descarta e reprocessa; depois do envio ⇒ próximo turno.
+  - Debounce por lead (DEBOUNCE_SEGUNDOS, teto DEBOUNCE_MAX_SEGUNDOS); advisory lock do
+    Postgres por lead; resposta sai pelo `CanalMensagemPort` do canal.
+  - POC: agendador in-process ⇒ API com 1 réplica; produção troca o adapter por fila.
 - **Agente (ADR 004)**
-  - Chat web e WhatsApp entram pelo **mesmo caso de uso** (`ProcessarMensagemRecebida`).
   - LLM só via `LLMPort` (nunca SDK/LangChain no núcleo); LangGraph só orquestra.
-  - Memória = histórico no banco (sem checkpointer). Mensagem do lead é gravada ANTES do LLM.
+  - Memória = histórico no banco (sem checkpointer); pendentes não entram no histórico.
   - Tools do agente chamam ports, nunca o banco.
   - Nada fora da base: códigos citados são conferidos no catálogo; código inexistente ⇒ uma
     correção; persistindo ⇒ fallback da persona.
@@ -159,11 +174,13 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
 - `make seed` (= `python -m sdr.cli seed`) — carrega o catálogo inicial da vertical ativa +
   embeddings (idempotente). Rodar após subir o compose.
 - `make busca q="apê 2 quartos zona sul até 800 mil perto do metrô"` — testa POST /imoveis/busca.
+- Debounce: `DEBOUNCE_SEGUNDOS` (5) e `DEBOUNCE_MAX_SEGUNDOS` (20).
 - LLM por nó: `LLM_MODEL_ROUTER`, `LLM_MODEL_EXTRACTION`, `LLM_MODEL_AGENT` (vazio = `LLM_MODELO`);
   `ROUTER_CONFIANCA_MIN` (0.6) para trocar de intenção.
 - `make e2e` — aceite da Etapa C com LLM real contra a API no ar (custa tokens; precisa de
   OPENAI_API_KEY no .env). Fora do `make check` (`addopts = -m 'not e2e'`).
-- Chat: http://localhost:8501 (Streamlit) ou `POST /conversas/mensagens {lead_id, texto}`.
+- Chat: http://localhost:8501 (Streamlit) ou `POST /conversas/mensagens {lead_id, texto}` (202)
+  + polling em `GET /conversas/{lead_id}/mensagens` (`processando` = Lia digitando).
 - Testes de integração usam o banco `sdr_test` (recriado e migrado por sessão); não tocam no seed.
 - Nova migration: `uv run alembic revision -m "descricao"`; `uv run alembic check` confirma que
   os modelos ORM batem com as migrations.
@@ -177,6 +194,8 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
   - Etapa C — Agente conversacional (LangGraph + OpenAI) com memória + chat Streamlit
     (Lead/Conversa/Mensagem no core; persona Lia e prompts na vertical)
 - **Dia 2** — Qualificação + multiagentes
+  - Etapa 0 — Processamento assíncrono com debounce (ReceberMensagem → agendador →
+    ProcessarTurno; advisory lock; HTTP 202 + polling) — ADR 006
   - Etapa A — Grafo genérico no core: roteador de intenção (com troca e "indefinida" →
     descoberta) → extração estruturada com merge incremental da ficha (JSONB) → scoring →
     especialista; VerticalPack com intenções/schemas/prioridades/scoring/critério/prompts;

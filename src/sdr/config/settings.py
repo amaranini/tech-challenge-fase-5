@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     # Agente
     agente_max_passos: int = 4  # máximo de rodadas LLM ↔ ferramentas por mensagem
     conversa_janela_historico: int = 30  # mensagens anteriores enviadas ao agente
+    # Turnos assíncronos (debounce por lead)
+    debounce_segundos: float = 5.0  # silêncio que encerra o turno; reinicia a cada mensagem
+    debounce_max_segundos: float = 20.0  # teto de espera desde a 1ª mensagem do turno
+
     router_confianca_min: float = 0.6  # abaixo disso, não troca de intenção
     extracao_janela_mensagens: int = 6  # mensagens recentes lidas por roteador/extração
 

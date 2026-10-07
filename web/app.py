@@ -8,7 +8,8 @@ import httpx
 import streamlit as st
 
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
-TIMEOUT = httpx.Timeout(90.0, connect=5.0)  # uma resposta pode envolver busca + 2 chamadas ao LLM
+TIMEOUT = httpx.Timeout(10.0, connect=5.0)
+POLLING_SEGUNDOS = 1.5
 
 
 def api_get(caminho: str, **params: Any) -> Any:
@@ -84,22 +85,37 @@ with st.sidebar:
 # ------------------------------------------------------------------ conversa
 lead_id: str = st.session_state.lead_id
 st.title("🏠 Lia — consultora da imobiliária")
-st.caption(f"Conversando como **{lead_id}** · reabra este lead_id para continuar de onde parou")
+st.caption(
+    f"Conversando como **{lead_id}** · pode mandar várias mensagens seguidas: a Lia espera "
+    "você terminar e responde ao conjunto · reabra este lead_id para continuar"
+)
 
-historico = api_get("/conversas/mensagens", lead_id=lead_id)
-for mensagem in historico["mensagens"]:
-    papel = "user" if mensagem["papel"] == "lead" else "assistant"
-    with st.chat_message(papel, avatar="🙂" if papel == "user" else "🏠"):
-        st.markdown(mensagem["texto"])
-        mostrar_itens(mensagem.get("itens_citados", []))
-
+# O envio só registra a mensagem (HTTP 202); a resposta chega pelo polling abaixo.
 if texto := st.chat_input("Escreva como se fosse no WhatsApp…"):
-    with st.chat_message("user", avatar="🙂"):
-        st.markdown(texto)
-    with st.chat_message("assistant", avatar="🏠"), st.spinner("Lia está digitando…"):
-        try:
-            api_enviar(lead_id, texto)
-        except (RuntimeError, httpx.HTTPError) as erro:
-            st.error(f"Não foi possível falar com a Lia: {erro}")
-            st.stop()
-    st.rerun()  # recarrega o histórico persistido (fonte da verdade é a API)
+    try:
+        api_enviar(lead_id, texto)
+    except (RuntimeError, httpx.HTTPError) as erro:
+        st.error(f"Não foi possível enviar: {erro}")
+
+
+@st.fragment(run_every=POLLING_SEGUNDOS)
+def conversa(lead_id: str) -> None:
+    """Reexecuta sozinho a cada POLLING_SEGUNDOS — só esta área, o input segue livre."""
+    try:
+        historico = api_get(f"/conversas/{lead_id}/mensagens")
+    except httpx.HTTPError as erro:
+        st.warning(f"Sem conexão com a API: {erro}")
+        return
+    for mensagem in historico["mensagens"]:
+        papel = "user" if mensagem["papel"] == "lead" else "assistant"
+        with st.chat_message(papel, avatar="🙂" if papel == "user" else "🏠"):
+            st.markdown(mensagem["texto"])
+            if mensagem["status"] == "falha":
+                st.caption("⚠️ a Lia não conseguiu responder a esta mensagem")
+            mostrar_itens(mensagem.get("itens_citados", []))
+    if historico["processando"]:
+        with st.chat_message("assistant", avatar="🏠"):
+            st.markdown("_Lia está digitando…_")
+
+
+conversa(lead_id)

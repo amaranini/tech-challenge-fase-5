@@ -64,8 +64,12 @@ class MensagemModel(Base):
     texto: Mapped[str] = mapped_column(Text)
     metadados: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
     criada_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(20), server_default="processada")
 
-    __table_args__ = (Index("ix_mensagens_conversa_criada", "conversa_id", "criada_em"),)
+    __table_args__ = (
+        Index("ix_mensagens_conversa_criada", "conversa_id", "criada_em"),
+        Index("ix_mensagens_conversa_status", "conversa_id", "status"),
+    )
 
 
 class LeadEventoModel(Base):

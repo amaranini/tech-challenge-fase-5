@@ -12,7 +12,7 @@ def _nao_usado() -> Any:
 def criar_dependencias(**fabricas: Any) -> Dependencias:
     padrao: dict[str, Any] = {
         "verificar_saude": _nao_usado,
-        "processar_mensagem": _nao_usado,
+        "receber_mensagem": _nao_usado,
         "obter_historico": _nao_usado,
         "listar_leads": _nao_usado,
     }

@@ -1,30 +1,29 @@
-"""Canal WEB: o `lead_id` público é o identificador do remetente no canal web.
+"""Canal WEB, assíncrono: o POST só registra a mensagem (202) e o turno é processado
+depois do debounce; o front acompanha por polling em GET /conversas/{lead_id}/mensagens.
 
-O WhatsApp (Dia 4) terá seu próprio router de webhook, convertendo para o mesmo
-MensagemRecebida e chamando o mesmo ProcessarMensagemRecebida.
+O `lead_id` público é o identificador do remetente no canal web. O WhatsApp (Dia 4) terá
+seu router de webhook chamando o mesmo ReceberMensagem.
 """
 
 from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 
 from sdr.core.adapters.inbound.http.dependencias import (
     obter_listar_leads,
     obter_obter_historico,
-    obter_processar_mensagem,
+    obter_receber_mensagem,
 )
 from sdr.core.application.dto.mensagem_recebida import MensagemRecebida
-from sdr.core.application.ports.llm import LLMIndisponivelError
 from sdr.core.application.use_cases.consultar_conversas import ListarLeads, ObterHistorico
-from sdr.core.application.use_cases.processar_mensagem_recebida import (
+from sdr.core.application.use_cases.receber_mensagem import (
     MensagemInvalidaError,
-    ProcessarMensagemRecebida,
+    ReceberMensagem,
 )
-from sdr.core.domain.catalogo import ItemCatalogo
-from sdr.core.domain.conversa import Canal, Mensagem, Papel
+from sdr.core.domain.conversa import Canal, Mensagem, Papel, StatusMensagem
 
 router = APIRouter(tags=["conversas"])
 
@@ -36,24 +35,12 @@ class EnvioMensagem(BaseModel):
     texto: str = Field(min_length=1, max_length=4000, examples=["Oi! Procuro um apê na zona sul"])
 
 
-class ItemSugerido(BaseModel):
-    id: str
-    titulo: str
-    resumo: str
-    atributos: dict[str, Any]
-
-    @classmethod
-    def de_dominio(cls, item: ItemCatalogo) -> "ItemSugerido":
-        return cls(
-            id=item.id, titulo=item.titulo, resumo=item.resumo, atributos=dict(item.atributos)
-        )
-
-
 class MensagemResposta(BaseModel):
     id: UUID
     papel: Papel
     texto: str
     criada_em: datetime
+    status: StatusMensagem
     itens_citados: list[dict[str, Any]] = Field(default_factory=list)
 
     @classmethod
@@ -64,20 +51,22 @@ class MensagemResposta(BaseModel):
             papel=m.papel,
             texto=m.texto,
             criada_em=m.criada_em,
+            status=m.status,
             itens_citados=list(citados) if isinstance(citados, list) else [],
         )
 
 
-class EnvioResposta(BaseModel):
+class RecebimentoResposta(BaseModel):
     lead_id: str
     conversa_id: UUID
-    resposta: MensagemResposta
-    itens_sugeridos: list[ItemSugerido]
+    mensagem_id: UUID
+    status: StatusMensagem
 
 
 class HistoricoResposta(BaseModel):
     lead_id: str
     conversa_id: UUID | None
+    processando: bool = Field(description="Há turno agendado/em andamento (Lia digitando)")
     mensagens: list[MensagemResposta]
 
 
@@ -88,37 +77,35 @@ class LeadResumo(BaseModel):
     ultima_interacao_em: datetime | None
 
 
-@router.post("/conversas/mensagens", response_model=EnvioResposta)
-async def enviar_mensagem(
+@router.post("/conversas/mensagens", response_model=RecebimentoResposta, status_code=202)
+async def receber_mensagem(
     envio: EnvioMensagem,
-    processar: Annotated[ProcessarMensagemRecebida, Depends(obter_processar_mensagem)],
-) -> EnvioResposta:
+    receber: Annotated[ReceberMensagem, Depends(obter_receber_mensagem)],
+) -> RecebimentoResposta:
     try:
-        resultado = await processar.executar(
+        resultado = await receber.executar(
             MensagemRecebida(canal=Canal.WEB, remetente_id=envio.lead_id, texto=envio.texto)
         )
     except MensagemInvalidaError as erro:
         raise HTTPException(422, str(erro)) from erro
-    except LLMIndisponivelError as erro:
-        raise HTTPException(503, f"Agente indisponível: {erro}") from erro
-
-    return EnvioResposta(
+    return RecebimentoResposta(
         lead_id=resultado.lead.remetente_id,
         conversa_id=resultado.conversa.id,
-        resposta=MensagemResposta.de_dominio(resultado.resposta),
-        itens_sugeridos=[ItemSugerido.de_dominio(i) for i in resultado.itens_sugeridos],
+        mensagem_id=resultado.mensagem.id,
+        status=resultado.mensagem.status,
     )
 
 
-@router.get("/conversas/mensagens", response_model=HistoricoResposta)
+@router.get("/conversas/{lead_id}/mensagens", response_model=HistoricoResposta)
 async def historico(
-    lead_id: Annotated[str, Query(min_length=1, max_length=100)],
+    lead_id: Annotated[str, Path(min_length=1, max_length=100)],
     obter: Annotated[ObterHistorico, Depends(obter_obter_historico)],
 ) -> HistoricoResposta:
     resultado = await obter.executar(Canal.WEB, lead_id)
     return HistoricoResposta(
         lead_id=lead_id,
         conversa_id=resultado.conversa.id if resultado.conversa else None,
+        processando=resultado.processando,
         mensagens=[MensagemResposta.de_dominio(m) for m in resultado.mensagens],
     )
 

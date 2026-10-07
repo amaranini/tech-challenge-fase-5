@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -19,6 +19,7 @@ from sdr.core.domain.conversa import (
     Mensagem,
     Papel,
     StatusConversa,
+    StatusMensagem,
 )
 from sdr.core.domain.eventos import EventoLead, TipoEvento
 from sdr.core.domain.qualificacao import Classificacao, Qualificacao, Score
@@ -68,12 +69,18 @@ def _mensagem(m: MensagemModel) -> Mensagem:
         texto=m.texto,
         criada_em=m.criada_em,
         metadados=dict(m.metadados or {}),
+        status=StatusMensagem(m.status),
     )
 
 
 class LeadRepositorySql:
     def __init__(self, sessoes: async_sessionmaker[AsyncSession]) -> None:
         self._sessoes = sessoes
+
+    async def obter(self, lead_id: UUID) -> Lead | None:
+        async with self._sessoes() as sessao:
+            modelo = await sessao.get(LeadModel, lead_id)
+        return _lead(modelo) if modelo else None
 
     async def obter_por_remetente(self, canal: Canal, remetente_id: str) -> Lead | None:
         async with self._sessoes() as sessao:
@@ -170,20 +177,56 @@ class ConversaRepositorySql:
                     texto=mensagem.texto,
                     metadados=dict(mensagem.metadados),
                     criada_em=mensagem.criada_em,
+                    status=mensagem.status.value,
                 )
             )
 
-    async def ultimas_mensagens(self, conversa_id: UUID, limite: int) -> list[Mensagem]:
+    async def ultimas_mensagens(
+        self, conversa_id: UUID, limite: int, *, incluir_pendentes: bool = False
+    ) -> list[Mensagem]:
+        stmt = select(MensagemModel).where(MensagemModel.conversa_id == conversa_id)
+        if not incluir_pendentes:
+            stmt = stmt.where(MensagemModel.status != StatusMensagem.PENDENTE.value)
+        stmt = stmt.order_by(MensagemModel.criada_em.desc(), MensagemModel.id.desc()).limit(limite)
+        async with self._sessoes() as sessao:
+            modelos = (await sessao.scalars(stmt)).all()
+        return [_mensagem(m) for m in reversed(modelos)]
+
+    async def pendentes(self, conversa_id: UUID) -> list[Mensagem]:
         async with self._sessoes() as sessao:
             modelos = (
                 await sessao.scalars(
                     select(MensagemModel)
-                    .where(MensagemModel.conversa_id == conversa_id)
-                    .order_by(MensagemModel.criada_em.desc(), MensagemModel.id.desc())
-                    .limit(limite)
+                    .where(
+                        MensagemModel.conversa_id == conversa_id,
+                        MensagemModel.status == StatusMensagem.PENDENTE.value,
+                    )
+                    .order_by(MensagemModel.criada_em, MensagemModel.id)
                 )
             ).all()
-        return [_mensagem(m) for m in reversed(modelos)]
+        return [_mensagem(m) for m in modelos]
+
+    async def marcar_status(self, ids: Sequence[UUID], status: StatusMensagem) -> None:
+        if not ids:
+            return
+        async with self._sessoes.begin() as sessao:
+            await sessao.execute(
+                update(MensagemModel)
+                .where(MensagemModel.id.in_(list(ids)))
+                .values(status=status.value)
+            )
+
+    async def leads_com_pendentes(self) -> list[UUID]:
+        async with self._sessoes() as sessao:
+            ids = (
+                await sessao.scalars(
+                    select(ConversaModel.lead_id)
+                    .join(MensagemModel, MensagemModel.conversa_id == ConversaModel.id)
+                    .where(MensagemModel.status == StatusMensagem.PENDENTE.value)
+                    .distinct()
+                )
+            ).all()
+        return list(ids)
 
 
 class LeadEventoRepositorySql:

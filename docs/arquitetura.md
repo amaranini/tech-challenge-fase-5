@@ -95,7 +95,7 @@ flowchart TB
             http[http — app FastAPI<br/>/health · /conversas · /leads]
         end
         subgraph capp[application — sem frameworks]
-            cuc[use_cases<br/>ProcessarMensagemRecebida · ObterHistorico<br/>ListarLeads · VerificarSaude]
+            cuc[use_cases<br/>ReceberMensagem · ProcessarTurno · ObterHistorico<br/>ListarLeads · RecuperarTurnosPendentes · VerificarSaude]
             cports{{ports<br/>CatalogoPort · EmbeddingPort · LLMPort · Ferramenta<br/>LeadRepository · ConversaRepository<br/>AgenteConversacionalPort · CanalMensagemPort*}}
             cferr[ferramentas<br/>FerramentaBuscarCatalogo]
         end
@@ -194,7 +194,9 @@ sequenceDiagram
     P-->>B: VerticalMontada(catalogo, persona, ferramentas, intencoes, regras, prompt_descoberta, routers, carga)
     B->>B: LLMOpenAI por nó (LLM_MODEL_ROUTER/EXTRACTION/AGENT)
     B->>B: AgenteQualificador(llms, persona, ConfigQualificacao(intencoes, regras, descoberta))
-    B->>B: ProcessarMensagemRecebida(leads, conversas, agente, catalogo, persona)
+    B->>B: ProcessarTurno(..., trava Postgres, canais={web: CanalWeb})
+    B->>B: AgendadorDebounce(DEBOUNCE_SEGUNDOS, DEBOUNCE_MAX_SEGUNDOS) → executa ProcessarTurno
+    B->>B: ReceberMensagem(leads, conversas, eventos, agendador)
     B->>A: criar_app(Dependencias, routers=vertical.routers)
 ```
 
@@ -220,7 +222,7 @@ sequenceDiagram
 
 Os próximos fluxos seguem o mesmo desenho: o router só traduz HTTP ↔ caso de uso. A mensagem
 de um lead, venha do chat web ou do WhatsApp, vira um `MensagemRecebida` e entra no mesmo
-`ProcessarMensagemRecebida`, do core.
+`ReceberMensagem`, do core.
 
 ## 6. Grafo de qualificação (um turno)
 
@@ -242,43 +244,45 @@ flowchart TD
 O caso de uso grava a mensagem da Lia, o `Lead` (colunas e fichas JSONB) e os eventos em
 `lead_eventos`. O grafo não persiste nada.
 
-## 7. Mensagem do lead → resposta da Lia (`POST /conversas/mensagens`)
+## 7. Mensagens do lead → turno → resposta da Lia (assíncrono, [ADR 006](adr/006-processamento-assincrono-debounce.md))
 
 ```mermaid
 sequenceDiagram
     participant W as Streamlit (canal web)
     participant R as router conversas (core)
-    participant U as ProcessarMensagemRecebida (core)
-    participant DB as Lead/ConversaRepository
-    participant G as AgenteQualificador (core)
-    participant L as LLMOpenAI (core)
-    participant T as FerramentaBuscarCatalogo → CatalogoPort
-    participant V as CatalogoImobiliario (vertical)
+    participant RM as ReceberMensagem
+    participant AG as AgendadorDebounce
+    participant PT as ProcessarTurno
+    participant TR as Trava (advisory lock)
+    participant DB as Repositórios
+    participant G as AgenteQualificador
+    participant C as CanalWeb
 
-    W->>R: {lead_id, texto}
-    R->>U: MensagemRecebida(canal=web, remetente_id=lead_id, texto)
-    U->>DB: obter/criar Lead e Conversa aberta; últimas N mensagens
-    U->>DB: grava mensagem do LEAD (antes do LLM)
-    U->>G: responder(lead + Qualificacao, histórico, texto)
-    G->>L: roteador e extração (saída estruturada) → merge e scoring (ver §6)
-    G->>L: especialista: persona + prompt + estado + histórico, tools
-    L-->>G: tool_call buscar_imoveis(texto, filtros)
-    G->>T: executar(argumentos)
-    T->>V: buscar(ConsultaCatalogo) → BuscarImoveis (busca híbrida)
-    V-->>T: ItemCatalogo[] (IMV-xxx)
-    T-->>G: JSON com itens
-    G->>L: histórico + resultado da tool
-    L-->>G: texto curto citando IMV-001, IMV-005...
-    G-->>U: RespostaAgente(texto, itens, tokens, Qualificacao nova, eventos)
-    U->>V: códigos citados existem? (obter) — senão 1 correção, depois fallback
-    U->>DB: grava mensagem da LIA (itens citados, prompt_versao, modelo, tokens, roteamento)
-    U->>DB: grava Lead (intenção, fichas, score, próxima ação) e lead_eventos
-    U-->>R: ResultadoProcessamento
-    R-->>W: {resposta, itens_sugeridos}
+    W->>R: POST "procuro apê"
+    R->>RM: MensagemRecebida
+    RM->>DB: grava mensagem PENDENTE (cria Lead/Conversa se preciso)
+    RM->>AG: agendar(lead) — abre janela de 5s
+    R-->>W: 202
+    W->>R: POST "zona sul" (t+1s) / "até 800 mil" (t+3s)
+    RM->>AG: agendar(lead) — reinicia a janela (teto 20s desde a 1ª)
+    loop polling a cada 1,5s
+        W->>R: GET /conversas/{lead_id}/mensagens
+        R-->>W: mensagens + processando=true → "Lia está digitando…"
+    end
+    AG->>PT: executar(lead) após 5s de silêncio
+    PT->>TR: pg_try_advisory_lock(lead)
+    PT->>DB: pendentes = [procuro apê, zona sul, até 800 mil]
+    PT->>G: responder(texto agregado, histórico sem pendentes)
+    G-->>PT: resposta + Qualificacao + eventos
+    PT->>DB: chegaram novas pendentes? (sim → descarta e reprocessa)
+    PT->>DB: grava resposta ENVIADA, lote PROCESSADO, Lead e lead_eventos
+    PT->>C: enviar(lead, resposta)
+    PT->>TR: unlock
+    W->>R: GET … → processando=false, resposta visível
 ```
 
-Reabrir o mesmo `lead_id` reencontra o mesmo Lead (canal + remetente) e a conversa aberta.
-O histórico vem do banco, que é a fonte única da memória.
+A guarda contra itens inventados (códigos citados conferidos no catálogo, uma correção e
+depois o fallback) roda dentro do `ProcessarTurno`, antes da checagem de novas mensagens.
 
 ## 8. Busca híbrida de imóveis (`POST /imoveis/busca`, rota da vertical)
 

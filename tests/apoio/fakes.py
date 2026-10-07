@@ -3,7 +3,9 @@
 import hashlib
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager
+from dataclasses import replace
 from uuid import UUID
 
 from sdr.core.application.ports.agente import EntradaAgente
@@ -22,7 +24,7 @@ from sdr.core.domain.catalogo import (
     ItemCatalogo,
     ResultadoCatalogo,
 )
-from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem
+from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem, StatusMensagem
 from sdr.core.domain.eventos import EventoLead
 
 DIMENSAO_FAKE = 64
@@ -135,6 +137,9 @@ class LeadRepositoryFake:
     def __init__(self) -> None:
         self.leads: dict[UUID, Lead] = {}
 
+    async def obter(self, lead_id: UUID) -> Lead | None:
+        return self.leads.get(lead_id)
+
     async def obter_por_remetente(self, canal: Canal, remetente_id: str) -> Lead | None:
         return next(
             (
@@ -166,8 +171,33 @@ class ConversaRepositoryFake:
     async def adicionar_mensagem(self, mensagem: Mensagem) -> None:
         self.mensagens.append(mensagem)
 
-    async def ultimas_mensagens(self, conversa_id: UUID, limite: int) -> list[Mensagem]:
-        return [m for m in self.mensagens if m.conversa_id == conversa_id][-limite:]
+    async def ultimas_mensagens(
+        self, conversa_id: UUID, limite: int, *, incluir_pendentes: bool = False
+    ) -> list[Mensagem]:
+        return [
+            m
+            for m in self.mensagens
+            if m.conversa_id == conversa_id
+            and (incluir_pendentes or m.status is not StatusMensagem.PENDENTE)
+        ][-limite:]
+
+    async def pendentes(self, conversa_id: UUID) -> list[Mensagem]:
+        return [
+            m
+            for m in self.mensagens
+            if m.conversa_id == conversa_id and m.status is StatusMensagem.PENDENTE
+        ]
+
+    async def marcar_status(self, ids: Sequence[UUID], status: StatusMensagem) -> None:
+        alvo = set(ids)
+        self.mensagens = [replace(m, status=status) if m.id in alvo else m for m in self.mensagens]
+
+    async def leads_com_pendentes(self) -> list[UUID]:
+        conversas = {m.conversa_id for m in self.mensagens if m.status is StatusMensagem.PENDENTE}
+        return [c.lead_id for c in self.conversas.values() if c.id in conversas]
+
+    def textos(self, status: StatusMensagem | None = None) -> list[str]:
+        return [m.texto for m in self.mensagens if status is None or m.status is status]
 
 
 class AgenteRoteirizado:
@@ -194,3 +224,44 @@ class LeadEventoRepositoryFake:
 
     async def listar(self, lead_id: UUID, limite: int = 200) -> list[EventoLead]:
         return [e for e in self.eventos if e.lead_id == lead_id][:limite]
+
+
+class AgendadorFake:
+    """Só registra os agendamentos; o teste dispara o turno quando quiser."""
+
+    def __init__(self) -> None:
+        self.agendados: list[UUID] = []
+
+    def agendar(self, lead_id: UUID) -> None:
+        self.agendados.append(lead_id)
+
+
+class TravaFake:
+    def __init__(self) -> None:
+        self.ocupadas: set[UUID] = set()
+        self.maximo_simultaneo = 0
+
+    @asynccontextmanager
+    async def travar(self, lead_id: UUID) -> AsyncIterator[bool]:
+        if lead_id in self.ocupadas:
+            yield False
+            return
+        self.ocupadas.add(lead_id)
+        self.maximo_simultaneo = max(self.maximo_simultaneo, len(self.ocupadas))
+        try:
+            yield True
+        finally:
+            self.ocupadas.discard(lead_id)
+
+
+class CanalFake:
+    def __init__(self) -> None:
+        self.enviadas: list[tuple[Lead, Mensagem]] = []
+
+    async def enviar(self, lead: Lead, mensagem: Mensagem) -> None:
+        self.enviadas.append((lead, mensagem))
+
+    async def enviar_template(
+        self, lead: Lead, template: str, variaveis: Mapping[str, str]
+    ) -> None:
+        raise AssertionError("template não esperado")

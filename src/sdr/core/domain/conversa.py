@@ -23,6 +23,13 @@ class Papel(StrEnum):
     AGENTE = "agente"
 
 
+class StatusMensagem(StrEnum):
+    PENDENTE = "pendente"  # do lead, aguardando o turno ser processado
+    PROCESSADA = "processada"  # do lead, já respondida
+    FALHA = "falha"  # do lead, o turno falhou (fica no histórico, sem resposta)
+    ENVIADA = "enviada"  # do agente, entregue ao canal
+
+
 class StatusConversa(StrEnum):
     ABERTA = "aberta"
     ENCERRADA = "encerrada"
@@ -90,6 +97,7 @@ class Mensagem:
     texto: str
     criada_em: datetime
     metadados: Mapping[str, object] = field(default_factory=dict)
+    status: StatusMensagem = StatusMensagem.PROCESSADA
 
     @classmethod
     def nova(
@@ -97,9 +105,12 @@ class Mensagem:
         conversa_id: UUID,
         papel: Papel,
         texto: str,
+        *,
         metadados: Mapping[str, object] | None = None,
         criada_em: datetime | None = None,
+        status: StatusMensagem | None = None,
     ) -> "Mensagem":
+        padrao = StatusMensagem.PROCESSADA if papel is Papel.LEAD else StatusMensagem.ENVIADA
         return cls(
             id=uuid4(),
             conversa_id=conversa_id,
@@ -107,4 +118,5 @@ class Mensagem:
             texto=texto,
             criada_em=criada_em or agora(),
             metadados=dict(metadados or {}),
+            status=status or padrao,
         )

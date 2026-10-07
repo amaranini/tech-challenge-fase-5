@@ -1,6 +1,8 @@
 # ADR 004 — Agente conversacional: LLM por port, LangGraph como orquestrador, memória no banco
 
-- **Status:** Aceita
+- **Status:** Aceita (item 4 revisto pelo [ADR 006](006-processamento-assincrono-debounce.md):
+  a entrada única passou a ser `ReceberMensagem`, e o turno é processado de forma
+  assíncrona por `ProcessarTurno`)
 - **Data:** 2026-10-06
 - **Relacionados:** [ADR 001](001-arquitetura-hexagonal.md),
   [ADR 003](003-core-multi-segmento.md)

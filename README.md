@@ -48,7 +48,8 @@ No Streamlit, crie ou escolha um `lead_id` na barra lateral e converse. Reabrir 
 ```bash
 curl -s localhost:8000/conversas/mensagens -H 'content-type: application/json' \
   -d '{"lead_id": "lead-ana", "texto": "Oi! Procuro um apê de 2 quartos na zona sul"}'
-curl -s 'localhost:8000/conversas/mensagens?lead_id=lead-ana'   # histórico
+# → 202: a Lia espera você parar de digitar (DEBOUNCE_SEGUNDOS) e responde ao conjunto
+curl -s 'localhost:8000/conversas/lead-ana/mensagens'   # histórico + "processando"
 ```
 
 `make e2e` roda o aceite com o LLM real (memória, retomada e nenhum imóvel inventado).

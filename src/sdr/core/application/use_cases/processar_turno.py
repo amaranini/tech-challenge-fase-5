@@ -1,41 +1,50 @@
-"""Porta de entrada única de mensagens de leads — web hoje, WhatsApp depois."""
+"""Processa o TURNO de um lead: agrega as mensagens pendentes e responde ao conjunto.
+
+1. Trava o lead (nunca dois turnos do mesmo lead em paralelo); se não conseguir, reagenda.
+2. Agrega as mensagens PENDENTES em ordem e executa o agente UMA vez.
+3. Se chegaram mensagens novas enquanto o agente pensava (resposta ainda não enviada),
+   descarta a resposta e reprocessa com tudo.
+4. Persiste a resposta, marca o lote como PROCESSADO, grava qualificação/eventos e
+   entrega pelo CanalMensagemPort do canal do lead.
+"""
 
 import logging
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from uuid import UUID
 
-from sdr.core.application.dto.mensagem_recebida import MensagemRecebida
 from sdr.core.application.ports.agente import AgenteConversacionalPort, EntradaAgente
+from sdr.core.application.ports.canal import CanalMensagemPort
 from sdr.core.application.ports.catalogo import CatalogoPort
 from sdr.core.application.ports.repositorios import (
     ConversaRepository,
     LeadEventoRepository,
     LeadRepository,
 )
+from sdr.core.application.ports.turnos import AgendadorTurnoPort, TravaTurnoPort
 from sdr.core.domain.agente import Persona, RespostaAgente
 from sdr.core.domain.catalogo import ItemCatalogo
-from sdr.core.domain.conversa import Conversa, Lead, Mensagem, Papel
-from sdr.core.domain.eventos import EventoLead, TipoEvento
+from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem, Papel, StatusMensagem
+from sdr.core.domain.conversa import agora as agora_utc
 
 logger = logging.getLogger(__name__)
 
 JANELA_HISTORICO_PADRAO = 30
-LIMITE_TEXTO = 4000
-
-
-class MensagemInvalidaError(ValueError):
-    pass
+MAX_REPROCESSAMENTOS = 3
 
 
 @dataclass(frozen=True)
-class ResultadoProcessamento:
+class ResultadoTurno:
     lead: Lead
     conversa: Conversa
+    lote: tuple[Mensagem, ...]
     resposta: Mensagem
     itens_sugeridos: tuple[ItemCatalogo, ...]
     campos_faltantes: tuple[str, ...] = ()
+    reprocessamentos: int = 0
 
 
-class ProcessarMensagemRecebida:
+class ProcessarTurno:
     def __init__(
         self,
         leads: LeadRepository,
@@ -45,47 +54,95 @@ class ProcessarMensagemRecebida:
         *,
         eventos: LeadEventoRepository,
         persona: Persona,
+        trava: TravaTurnoPort,
+        agendador: AgendadorTurnoPort,
+        canais: Mapping[Canal, CanalMensagemPort],
         janela_historico: int = JANELA_HISTORICO_PADRAO,
+        max_reprocessamentos: int = MAX_REPROCESSAMENTOS,
     ) -> None:
         self._leads = leads
-        self._eventos = eventos
         self._conversas = conversas
         self._agente = agente
         self._catalogo = catalogo
+        self._eventos = eventos
         self._persona = persona
+        self._trava = trava
+        self._agendador = agendador
+        self._canais = canais
         self._janela_historico = janela_historico
+        self._max_reprocessamentos = max_reprocessamentos
 
-    async def executar(self, mensagem: MensagemRecebida) -> ResultadoProcessamento:
-        texto = mensagem.texto.strip()
-        if not texto:
-            raise MensagemInvalidaError("mensagem vazia")
-        if len(texto) > LIMITE_TEXTO:
-            raise MensagemInvalidaError(f"mensagem acima de {LIMITE_TEXTO} caracteres")
+    async def executar(self, lead_id: UUID) -> ResultadoTurno | None:
+        async with self._trava.travar(lead_id) as obtida:
+            if not obtida:
+                logger.info("Turno do lead %s já em andamento; reagendando", lead_id)
+                self._agendador.agendar(lead_id)
+                return None
+            return await self._processar(lead_id)
 
-        lead = await self._obter_ou_criar_lead(mensagem)
-        conversa = await self._obter_ou_abrir_conversa(lead)
-        historico = await self._conversas.ultimas_mensagens(conversa.id, self._janela_historico)
+    async def _processar(self, lead_id: UUID) -> ResultadoTurno | None:
+        lead = await self._leads.obter(lead_id)
+        conversa = await self._conversas.obter_aberta(lead_id) if lead else None
+        if lead is None or conversa is None:
+            return None
 
-        # A mensagem do lead é gravada antes de chamar o LLM: nunca se perde o que o lead disse.
-        recebida = Mensagem.nova(
-            conversa.id,
-            Papel.LEAD,
-            texto,
-            metadados={"canal": mensagem.canal.value, **dict(mensagem.metadados)},
-            criada_em=mensagem.timestamp,
-        )
-        await self._conversas.adicionar_mensagem(recebida)
+        for tentativa in range(self._max_reprocessamentos + 1):
+            lote = await self._conversas.pendentes(conversa.id)
+            if not lote:
+                return None
+            ids_lote = {m.id for m in lote}
+            historico = await self._conversas.ultimas_mensagens(conversa.id, self._janela_historico)
+            entrada = EntradaAgente(
+                lead=lead, historico=historico, texto="\n".join(m.texto for m in lote)
+            )
+            try:
+                resposta, itens, invalidos, fallback = await self._responder_sem_inventar(entrada)
+            except Exception:
+                logger.exception("Falha no turno do lead %s; lote marcado como FALHA", lead_id)
+                await self._conversas.marcar_status([m.id for m in lote], StatusMensagem.FALHA)
+                return None
 
-        entrada = EntradaAgente(lead=lead, historico=historico, texto=texto)
-        resposta, itens, invalidos, fallback = await self._responder_sem_inventar(entrada)
+            novas = [
+                m for m in await self._conversas.pendentes(conversa.id) if m.id not in ids_lote
+            ]
+            if novas and tentativa < self._max_reprocessamentos:
+                logger.info(
+                    "Lead %s mandou %d mensagem(ns) durante o turno; reprocessando",
+                    lead_id,
+                    len(novas),
+                )
+                continue
+            return await self._concluir(
+                lead,
+                conversa,
+                lote,
+                resposta,
+                itens=itens,
+                invalidos=invalidos,
+                fallback=fallback,
+                reprocessamentos=tentativa,
+            )
+        return None  # inalcançável: a última tentativa sempre conclui
 
+    async def _concluir(
+        self,
+        lead: Lead,
+        conversa: Conversa,
+        lote: Sequence[Mensagem],
+        resposta: RespostaAgente,
+        *,
+        itens: tuple[ItemCatalogo, ...],
+        invalidos: list[str],
+        fallback: bool,
+        reprocessamentos: int,
+    ) -> ResultadoTurno:
+        metadados = self._metadados(resposta, itens, invalidos, fallback)
+        metadados["responde_a"] = [str(m.id) for m in lote]
         enviada = Mensagem.nova(
-            conversa.id,
-            Papel.AGENTE,
-            resposta.texto,
-            self._metadados(resposta, itens, invalidos, fallback),
+            conversa.id, Papel.AGENTE, resposta.texto, metadados=metadados, criada_em=agora_utc()
         )
         await self._conversas.adicionar_mensagem(enviada)
+        await self._conversas.marcar_status([m.id for m in lote], StatusMensagem.PROCESSADA)
         conversa = conversa.tocar(enviada.criada_em)
         await self._conversas.salvar(conversa)
 
@@ -94,32 +151,23 @@ class ProcessarMensagemRecebida:
             await self._leads.salvar(lead)
         await self._eventos.registrar(resposta.eventos)
 
-        return ResultadoProcessamento(lead, conversa, enviada, itens, resposta.campos_faltantes)
+        canal = self._canais.get(lead.canal)
+        if canal is None:
+            logger.error("Sem CanalMensagemPort para o canal %s", lead.canal)
+        else:
+            await canal.enviar(lead, enviada)
 
-    async def _obter_ou_criar_lead(self, mensagem: MensagemRecebida) -> Lead:
-        lead = await self._leads.obter_por_remetente(mensagem.canal, mensagem.remetente_id)
-        if lead is None:
-            lead = Lead.novo(mensagem.canal, mensagem.remetente_id)
-            await self._leads.salvar(lead)
-            await self._eventos.registrar(
-                [
-                    EventoLead(
-                        lead.id,
-                        TipoEvento.LEAD_CRIADO,
-                        lead.criado_em,
-                        {"canal": lead.canal.value, "remetente_id": lead.remetente_id},
-                    )
-                ]
-            )
-        return lead
+        return ResultadoTurno(
+            lead,
+            conversa,
+            tuple(lote),
+            enviada,
+            itens,
+            resposta.campos_faltantes,
+            reprocessamentos,
+        )
 
-    async def _obter_ou_abrir_conversa(self, lead: Lead) -> Conversa:
-        conversa = await self._conversas.obter_aberta(lead.id)
-        if conversa is None:
-            conversa = Conversa.nova(lead)
-            await self._conversas.salvar(conversa)
-        return conversa
-
+    # ------------------------------------------------------------------ nada fora da base
     async def _responder_sem_inventar(
         self, entrada: EntradaAgente
     ) -> tuple[RespostaAgente, tuple[ItemCatalogo, ...], list[str], bool]:
