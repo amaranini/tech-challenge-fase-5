@@ -156,9 +156,28 @@ async def test_troca_de_intencao_no_meio_da_conversa() -> None:
     assert q.fichas["plano"] == {"unidade": "Centro"}
     assert resposta.eventos[0].tipo is TipoEvento.INTENCAO_ALTERADA
     assert "PROMPT_AVULSO" in cenario.agente.chamadas[0][0][0].conteudo
-    _, schema, nome = cenario.extracao.chamadas_estruturadas[0]
+    mensagens, schema, nome = cenario.extracao.chamadas_estruturadas[0]
     assert nome == "ficha_avulso"
     assert set(schema["properties"]["campos"]["properties"]) == {"unidade", "data"}  # type: ignore[index]
+    # Valores ditos para a intenção anterior não podem vazar para a nova ficha.
+    assert "mudou de intenção (plano → avulso)" in mensagens[0].conteudo
+
+
+async def test_sem_troca_de_intencao_extracao_nao_recebe_aviso() -> None:
+    lead = replace(
+        LEAD,
+        qualificacao=Qualificacao(LEAD.id, intencao_atual="plano", fichas={"plano": {}}),
+    )
+    cenario = Cenario(
+        roteador=[{"intencao": "plano", "confianca": 0.9}],
+        extracao=[extracao({"unidade": "Centro"})],
+    )
+
+    await cenario.grafo.responder(entrada(lead, "no Centro"))
+
+    sistema = cenario.extracao.chamadas_estruturadas[0][0][0].conteudo
+    assert "mudou de intenção" not in sistema
+    assert 'dito PARA a intenção "plano"' in sistema
 
 
 async def test_resposta_curta_mantem_intencao_mesmo_com_roteador_indefinido() -> None:

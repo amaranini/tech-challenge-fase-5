@@ -9,16 +9,15 @@ from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel, Field
 
 from sdr.core.adapters.inbound.http.dependencias import (
-    obter_listar_leads,
     obter_obter_historico,
     obter_receber_mensagem,
 )
 from sdr.core.application.dto.mensagem_recebida import MensagemRecebida
-from sdr.core.application.use_cases.consultar_conversas import ListarLeads, ObterHistorico
+from sdr.core.application.use_cases.consultar_conversas import ObterHistorico
 from sdr.core.application.use_cases.receber_mensagem import (
     MensagemInvalidaError,
     ReceberMensagem,
@@ -70,13 +69,6 @@ class HistoricoResposta(BaseModel):
     mensagens: list[MensagemResposta]
 
 
-class LeadResumo(BaseModel):
-    lead_id: str
-    criado_em: datetime
-    total_mensagens: int
-    ultima_interacao_em: datetime | None
-
-
 @router.post("/conversas/mensagens", response_model=RecebimentoResposta, status_code=202)
 async def receber_mensagem(
     envio: EnvioMensagem,
@@ -108,20 +100,3 @@ async def historico(
         processando=resultado.processando,
         mensagens=[MensagemResposta.de_dominio(m) for m in resultado.mensagens],
     )
-
-
-@router.get("/leads", response_model=list[LeadResumo])
-async def listar_leads(
-    listar: Annotated[ListarLeads, Depends(obter_listar_leads)],
-    limite: Annotated[int, Query(ge=1, le=200)] = 50,
-) -> list[LeadResumo]:
-    resumos = await listar.executar(Canal.WEB, limite)
-    return [
-        LeadResumo(
-            lead_id=r.lead.remetente_id,
-            criado_em=r.lead.criado_em,
-            total_mensagens=r.total_mensagens,
-            ultima_interacao_em=r.ultima_interacao_em,
-        )
-        for r in resumos
-    ]

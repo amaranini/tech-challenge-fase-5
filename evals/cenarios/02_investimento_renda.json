@@ -1,0 +1,47 @@
+{
+  "nome": "investimento_renda",
+  "descricao": "Exemplo 2 do enunciado: lead quer investir em imóveis para renda; a Lia qualifica o investimento até a próxima ação encaminhar_especialista.",
+  "falas": [
+    "Quero investir em imóveis para renda",
+    "Tenho uns 500 mil pra investir",
+    "Algo em torno de 6% ao ano",
+    "Penso no longo prazo, mais de 5 anos",
+    "Seria meu primeiro investimento em imóvel"
+  ],
+  "esperado": {
+    "intencao": "investimento",
+    "proxima_acao": "encaminhar_especialista",
+    "classificacao": "quente",
+    "score_min": 70,
+    "ficha": {
+      "ticket": 500000,
+      "objetivo": {
+        "um_de": [
+          "renda",
+          "ambos"
+        ]
+      },
+      "expectativa_retorno": 6,
+      "prazo_investimento": "longo_mais_de_5_anos",
+      "experiencia_previa": "primeiro_investimento"
+    },
+    "eventos": [
+      {
+        "tipo": "IntencaoIdentificada",
+        "payload": {
+          "intencao": "investimento"
+        }
+      },
+      {
+        "tipo": "LeadQualificado",
+        "payload": {
+          "intencao": "investimento",
+          "proxima_acao": "encaminhar_especialista"
+        }
+      }
+    ],
+    "eventos_ausentes": [
+      "IntencaoAlterada"
+    ]
+  }
+}

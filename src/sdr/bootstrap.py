@@ -40,6 +40,7 @@ from sdr.core.application.use_cases.consultar_conversas import (
     ObterHistorico,
     RecuperarTurnosPendentes,
 )
+from sdr.core.application.use_cases.obter_lead import ObterLead
 from sdr.core.application.use_cases.processar_turno import ProcessarTurno
 from sdr.core.application.use_cases.receber_mensagem import ReceberMensagem
 from sdr.core.application.use_cases.verificar_saude import VerificarSaude
@@ -82,6 +83,7 @@ class Container:
     recuperar_turnos: RecuperarTurnosPendentes
     obter_historico: ObterHistorico
     listar_leads: ListarLeads
+    obter_lead: ObterLead
 
     async def encerrar(self) -> None:
         await self.agendador.encerrar()
@@ -160,6 +162,7 @@ def montar_container(settings: Settings | None = None) -> Container:
         recuperar_turnos=RecuperarTurnosPendentes(conversas, agendador),
         obter_historico=ObterHistorico(leads, conversas),
         listar_leads=ListarLeads(leads),
+        obter_lead=ObterLead(leads, eventos, vertical.intencoes),
     )
 
 
@@ -181,6 +184,7 @@ def criar_aplicacao(settings: Settings | None = None) -> FastAPI:
             receber_mensagem=lambda: container.receber_mensagem,
             obter_historico=lambda: container.obter_historico,
             listar_leads=lambda: container.listar_leads,
+            obter_lead=lambda: container.obter_lead,
         ),
         routers=container.vertical.routers,
         ao_iniciar=[

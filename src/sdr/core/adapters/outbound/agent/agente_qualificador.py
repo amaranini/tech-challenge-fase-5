@@ -50,7 +50,12 @@ logger = logging.getLogger(__name__)
 FUSO_PADRAO = ZoneInfo("America/Sao_Paulo")
 PASTA_PROMPTS = Path(__file__).resolve().parent / "prompts"
 PROMPT_ROTEADOR = (PASTA_PROMPTS / "roteador_v1.md").read_text(encoding="utf-8")
-PROMPT_EXTRACAO = (PASTA_PROMPTS / "extracao_v1.md").read_text(encoding="utf-8")
+PROMPT_EXTRACAO = (PASTA_PROMPTS / "extracao_v2.md").read_text(encoding="utf-8")
+AVISO_TROCA_INTENCAO = (
+    "\nATENÇÃO: nesta mensagem o lead mudou de intenção ({de} → {para}). Tudo o que ele "
+    "disse antes desta mensagem foi para {de}; NÃO use esses valores nesta ficha (campos "
+    "equivalentes já foram herdados). Extraia só o que ele disse agora para {para}.\n"
+)
 
 
 @dataclass(frozen=True)
@@ -292,9 +297,14 @@ class AgenteQualificador:
             "required": ["campos", "campos_corrigidos", "campos_removidos"],
             "additionalProperties": False,
         }
+        anterior = estado["qualificacao_inicial"].intencao_atual
+        trocou = anterior is not None and anterior != intencao.nome
         sistema = PROMPT_EXTRACAO.format(
             intencao=intencao.nome,
             ficha=json.dumps(dict(q.ficha), ensure_ascii=False, default=str),
+            aviso_troca=(
+                AVISO_TROCA_INTENCAO.format(de=anterior, para=intencao.nome) if trocou else ""
+            ),
         )
         transcricao = _transcricao(
             estado["historico"], estado["texto"], self._config.janela_extracao

@@ -1,0 +1,64 @@
+{
+  "nome": "troca_aluguel_para_compra",
+  "descricao": "Lead começa querendo alugar e muda para compra no meio da conversa: IntencaoAlterada, a ficha de aluguel é preservada e a de compra herda regiao e quartos. O roteiro não tem correções: CampoQualificacaoCorrigido indica valor da intenção anterior vazando para a nova ficha (ex.: aluguel mensal lido como preço de compra).",
+  "falas": [
+    "Oi! Quero alugar um apartamento na zona oeste",
+    "2 quartos, até 4 mil por mês com condomínio",
+    "Pensando melhor, prefiro comprar em vez de alugar. Quero comprar um apartamento.",
+    "Até uns 900 mil"
+  ],
+  "esperado": {
+    "intencao": "compra",
+    "ficha": {
+      "regiao": {
+        "contem": "oeste"
+      },
+      "quartos": 2,
+      "preco_max": 900000
+    },
+    "fichas": {
+      "aluguel": {
+        "regiao": {
+          "contem": "oeste"
+        },
+        "quartos": 2,
+        "aluguel_max": 4000
+      }
+    },
+    "eventos": [
+      {
+        "tipo": "IntencaoIdentificada",
+        "payload": {
+          "intencao": "aluguel"
+        }
+      },
+      {
+        "tipo": "IntencaoAlterada",
+        "payload": {
+          "de": "aluguel",
+          "para": "compra"
+        }
+      },
+      {
+        "tipo": "CampoQualificacaoPreenchido",
+        "payload": {
+          "intencao": "compra",
+          "campo": "regiao",
+          "origem": "herdado:aluguel"
+        }
+      },
+      {
+        "tipo": "CampoQualificacaoPreenchido",
+        "payload": {
+          "intencao": "compra",
+          "campo": "quartos",
+          "origem": "herdado:aluguel"
+        }
+      }
+    ],
+    "eventos_ausentes": [
+      "CampoQualificacaoCorrigido",
+      "CampoQualificacaoRemovido"
+    ]
+  }
+}

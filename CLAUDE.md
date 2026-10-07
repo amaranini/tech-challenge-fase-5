@@ -1,11 +1,16 @@
 # CLAUDE.md — Agente SDR Conversacional (vertical ativa: imobiliário)
 
-## Fase atual: Dia 2 — Etapa C
+## Fase atual: Dia 2 — Etapa C entregue (aguardando ok da PO)
 
 Ao fim de CADA etapa: parar, listar como verificar o critério de aceite e esperar o ok da PO.
 Commits só com ok da PO, um por etapa, na branch `dia-2` (nunca direto na `main`).
 
-### Próxima etapa: Dia 2 — Etapa C (Exposição e verificação) — especificação da PO
+### Dia 2 — Etapa C (Exposição e verificação) — ENTREGUE, aguardando aceite da PO
+Entregue: `GET /leads/{id}` (caso de uso `ObterLead` no core), painel de qualificação ao
+lado do chat (Streamlit, fragment com polling), cenários `pytest -m llm` (`make llm`) lidos
+de `evals/cenarios/*.json`, migration 0006 (`lead_eventos.seq`: ordem estável dos eventos
+do mesmo instante) e prompt de extração v2 (valores da intenção anterior não vazam para a
+nova ficha na troca de intenção — achado do cenário 3). Especificação original abaixo.
 - `GET /leads/{id}` (id = `lead_id` público do canal web, como nas demais rotas): intenção,
   ficha, campos_faltantes, score, classificação, score_motivos, proxima_acao e eventos.
   `campos_faltantes` não é persistido: calcular com `campos_faltantes(ficha, prioridade)`
@@ -79,11 +84,14 @@ src/sdr/
       use_cases/           um caso de uso por arquivo: ReceberMensagem (entrada única de todos
                            os canais: grava PENDENTE e agenda), ProcessarTurno (agrega pendentes,
                            roda o grafo uma vez, entrega via canal), ObterHistorico,
-                           ListarLeads, RecuperarTurnosPendentes, VerificarSaude
+                           ListarLeads, ObterLead (qualificação + campos_faltantes derivados
+                           das intenções da vertical + eventos), RecuperarTurnosPendentes,
+                           VerificarSaude
       dto/                 MensagemRecebida normalizada e agnóstica de canal
                            (canal, remetente_id, texto, timestamp, metadados)
     adapters/              infraestrutura GENÉRICA, reaproveitada por qualquer vertical
-      inbound/http/        app FastAPI (registra routers da vertical), /health, /leads,
+      inbound/http/        app FastAPI (registra routers da vertical), /health, GET /leads,
+                           GET /leads/{lead_id} (qualificação; 404 se não existe),
                            POST /conversas/mensagens (202) e GET /conversas/{lead_id}/mensagens
       outbound/persistence/  engine async (SQLAlchemy + psycopg 3), Base ORM compartilhado,
                              leads (fichas JSONB + projeções da qualificação), conversas,
@@ -96,7 +104,7 @@ src/sdr/
                              LLM_PROVIDER, modelo via LLM_MODELO (ADR 004)
       outbound/agent/        AgenteQualificador (LangGraph): roteador → extração → scoring →
                              especialista ⇄ ferramentas | descoberta (ADR 005); LLM por nó;
-                             prompts genéricos em agent/prompts/ (roteador, extração);
+                             prompts genéricos em agent/prompts/ (roteador_v1, extracao_v2);
                              memória vem do banco, não do LangGraph
     vertical.py            contrato VerticalPack + InfraCompartilhada + VerticalMontada
   verticals/
@@ -123,14 +131,19 @@ src/sdr/
                            pelo registro VERTICAIS e chama pack.montar(infra)
   main.py                  entrypoint ASGI (uvicorn sdr.main:app)
   cli.py                   python -m sdr.cli seed — carga inicial do catálogo da vertical
-web/                       Streamlit (chat com polling via st.fragment + seletor de lead_id)
-                           — SOMENTE via API HTTP
+web/                       Streamlit: chat + painel de qualificação ao lado (dois
+                           st.fragment com polling) + seletor de lead_id — SOMENTE via API HTTP
 worker/                    (Dia 3) processo separado para follow-up
 migrations/                Alembic — histórico ÚNICO para core + verticais
-tests/apoio/               fakes dos ports e fábricas (core e por vertical)
+tests/apoio/               fakes dos ports e fábricas (core e por vertical); api_viva.py
+                           (postar/aguardar_resposta/obter_lead contra a API no ar);
+                           cenarios.py (carrega evals/cenarios e confere o estado final)
 tests/unit/{core,verticals/imobiliario}/          sem banco, sem LLM
 tests/integration/{core,verticals/imobiliario}/   @pytest.mark.integration; banco sdr_test
 tests/e2e/                 @pytest.mark.e2e — LLM real contra a API no ar (opt-in: make e2e)
+tests/llm/                 @pytest.mark.llm — cenários de qualificação com LLM real (make llm)
+evals/cenarios/            roteiros JSON (falas do lead + estado final esperado) — reusados
+                           no eval do Dia 5
 docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
 ```
 
@@ -215,8 +228,14 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
 - Debounce: `DEBOUNCE_SEGUNDOS` (5) e `DEBOUNCE_MAX_SEGUNDOS` (20).
 - LLM por nó: `LLM_MODEL_ROUTER`, `LLM_MODEL_EXTRACTION`, `LLM_MODEL_AGENT` (vazio = `LLM_MODELO`);
   `ROUTER_CONFIANCA_MIN` (0.6) para trocar de intenção.
-- `make e2e` — aceite da Etapa C com LLM real contra a API no ar (custa tokens; precisa de
-  OPENAI_API_KEY no .env). Fora do `make check` (`addopts = -m 'not e2e'`).
+- `make e2e` — aceite da Etapa C (Dia 1) com LLM real contra a API no ar (custa tokens; precisa
+  de OPENAI_API_KEY no .env). Fora do `make check` (`addopts = -m 'not e2e and not llm'`).
+- `make llm` (= `pytest -m llm -v -s`) — cenários de qualificação com LLM real lidos de
+  `evals/cenarios/*.json` (compra → agendar_visita, investimento → encaminhar_especialista,
+  troca aluguel → compra); asserts no estado via `GET /leads/{id}` e no painel (AppTest).
+  Cada fala espera a resposta (debounce). ~2–3 min. Novo cenário = novo JSON, sem código.
+- `GET /leads/{lead_id}` — estado de qualificação (intenção, ficha, fichas, campos_faltantes,
+  score, classificação, score_motivos, próxima ação, eventos).
 - Chat: http://localhost:8501 (Streamlit) ou `POST /conversas/mensagens {lead_id, texto}` (202)
   + polling em `GET /conversas/{lead_id}/mensagens` (`processando` = Lia digitando).
 - Testes de integração usam o banco `sdr_test` (recriado e migrado por sessão); não tocam no seed.
@@ -242,7 +261,7 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
     scoring por regras com score_motivos, critério de qualificado e proxima_acao,
     prompts dos especialistas (persona Lia)
   - Etapa C — GET /leads/{id}, painel de qualificação no Streamlit, cenários com LLM real
-    (`pytest -m llm`) salvos em evals/cenarios/
+    (`pytest -m llm`) salvos em evals/cenarios/ — entregue
   - Aceite do dia: Exemplos 1 e 2 do enunciado ponta a ponta no chat com ficha, score e
     próxima ação no painel; lint-imports, ruff, mypy e pytest passam; `pytest -m llm` passa
 - **Dia 3** — Agenda mock de corretores + resumo para corretor + worker de follow-up

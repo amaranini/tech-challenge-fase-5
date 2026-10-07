@@ -9,7 +9,9 @@ Este documento descreve como o sistema é organizado. Ele se apoia em três deci
 - **agente com LLM por port, LangGraph como orquestrador e memória no banco:**
   [ADR 004](adr/004-agente-llm-memoria.md);
 - **grafo genérico de qualificação (roteador, extração, scoring, especialistas):**
-  [ADR 005](adr/005-grafo-qualificacao-multiagente.md).
+  [ADR 005](adr/005-grafo-qualificacao-multiagente.md);
+- **turnos assíncronos com agregação de mensagens (debounce):**
+  [ADR 006](adr/006-processamento-assincrono-debounce.md).
 
 ## 1. Contexto
 
@@ -92,16 +94,16 @@ flowchart TB
 
     subgraph core[sdr.core]
         subgraph cin[adapters/inbound]
-            http[http — app FastAPI<br/>/health · /conversas · /leads]
+            http[http — app FastAPI<br/>/health · /conversas · /leads · /leads/&#123;id&#125;]
         end
         subgraph capp[application — sem frameworks]
-            cuc[use_cases<br/>ReceberMensagem · ProcessarTurno · ObterHistorico<br/>ListarLeads · RecuperarTurnosPendentes · VerificarSaude]
-            cports{{ports<br/>CatalogoPort · EmbeddingPort · LLMPort · Ferramenta<br/>LeadRepository · ConversaRepository<br/>AgenteConversacionalPort · CanalMensagemPort*}}
+            cuc[use_cases<br/>ReceberMensagem · ProcessarTurno · ObterHistorico<br/>ListarLeads · ObterLead · RecuperarTurnosPendentes · VerificarSaude]
+            cports{{ports<br/>CatalogoPort · EmbeddingPort · LLMPort · Ferramenta<br/>LeadRepository · ConversaRepository · LeadEventoRepository<br/>AgenteConversacionalPort · AgendadorTurnoPort · TravaTurnoPort · CanalMensagemPort}}
             cferr[ferramentas<br/>FerramentaBuscarCatalogo]
         end
-        cdom[domain — sem frameworks<br/>Lead · Conversa · Mensagem · Persona · ItemCatalogo<br/>Qualificacao* · Score* · Agendamento*]
+        cdom[domain — sem frameworks<br/>Lead · Conversa · Mensagem · Persona · ItemCatalogo<br/>Qualificacao · Score · EventoLead · Agendamento*]
         subgraph cout[adapters/outbound]
-            persist[persistence<br/>engine · Base ORM · leads/conversas/mensagens]
+            persist[persistence<br/>engine · Base ORM · leads/conversas/mensagens/lead_eventos]
             emb[embeddings<br/>fastembed]
             llm[llm — OpenAI]
             agent[agent — LangGraph<br/>AgenteQualificador]
@@ -197,6 +199,7 @@ sequenceDiagram
     B->>B: ProcessarTurno(..., trava Postgres, canais={web: CanalWeb})
     B->>B: AgendadorDebounce(DEBOUNCE_SEGUNDOS, DEBOUNCE_MAX_SEGUNDOS) → executa ProcessarTurno
     B->>B: ReceberMensagem(leads, conversas, eventos, agendador)
+    B->>B: ObterLead(leads, eventos, vertical.intencoes)
     B->>A: criar_app(Dependencias, routers=vertical.routers)
 ```
 
@@ -284,7 +287,36 @@ sequenceDiagram
 A guarda contra itens inventados (códigos citados conferidos no catálogo, uma correção e
 depois o fallback) roda dentro do `ProcessarTurno`, antes da checagem de novas mensagens.
 
-## 8. Busca híbrida de imóveis (`POST /imoveis/busca`, rota da vertical)
+## 8. Estado de qualificação e painel (`GET /leads/{lead_id}`)
+
+```mermaid
+sequenceDiagram
+    participant W as Streamlit — fragment "painel" (polling 1,5s)
+    participant R as router leads (core)
+    participant U as ObterLead (core use case)
+    participant L as LeadRepository
+    participant E as LeadEventoRepository
+
+    W->>R: GET /leads/{lead_id}
+    R->>U: executar(Canal.WEB, lead_id)
+    U->>L: obter_por_remetente → Lead + Qualificacao (colunas + fichas JSONB)
+    U->>U: campos_faltantes(ficha, IntencaoVertical.prioridade_campos)<br/>(intenções da vertical injetadas pelo bootstrap; não persistido)
+    U->>E: listar(lead.id) — ordem (ocorrido_em, seq)
+    U-->>R: EstadoLead | None
+    R-->>W: 200 {intencao, ficha, fichas, campos_faltantes, score, classificacao,<br/>score_motivos, proxima_acao, qualificado_em, eventos} · 404
+```
+
+O core não interpreta a ficha: devolve os nomes de campo da vertical. O vocabulário de
+exibição (rótulos, emojis, formato em reais) fica no front da vertical (`web/app.py`).
+Chat e painel são dois `st.fragment(run_every=1.5s)` em colunas lado a lado; só eles se
+redesenham, e o campo de mensagem continua livre.
+
+**Cenários com LLM real** (`make llm`): `tests/llm/test_cenarios.py` lê os roteiros de
+`evals/cenarios/*.json`, manda cada fala e espera a resposta, como no chat. Depois confere
+o estado final via `GET /leads/{id}` e o painel via `streamlit.testing` (AppTest), sem
+olhar o texto da Lia.
+
+## 9. Busca híbrida de imóveis (`POST /imoveis/busca`, rota da vertical)
 
 ```mermaid
 sequenceDiagram
@@ -322,7 +354,7 @@ rejeitadas), chama o mesmo `BuscarImoveis` e devolve `ItemCatalogo` com `resumo`
 2. `EmbeddingPort.gerar_documentos(texto_semantico)` gera os vetores;
 3. `IndiceImoveisPort.indexar` grava os vetores no índice.
 
-## 9. Implantação local
+## 10. Implantação local
 
 ```mermaid
 flowchart LR

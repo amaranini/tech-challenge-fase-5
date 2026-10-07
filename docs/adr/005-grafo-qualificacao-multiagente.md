@@ -64,10 +64,21 @@ intenções nem os campos.
    informa o próximo campo, com descrição, e a instrução de no máximo uma pergunta,
    aproveitando o que o lead já disse e respondendo antes às dúvidas dele. Os demais
    campos faltantes vão como contexto, para não serem perguntados agora.
-9. **Eventos de domínio** são gravados em `lead_eventos` (tipo, payload JSONB, timestamp):
+9. **Extração na troca de intenção** (acrescentado na Etapa C). A extração lê as últimas
+   mensagens, que, no turno da troca, falam da intenção anterior. Num cenário com LLM real,
+   o "até 4 mil por mês" do aluguel virou `preco_max = 4.000.000` na ficha de compra (o
+   modelo "ajustou" o número ao mínimo do schema). O prompt `extracao_v2` passou a exigir
+   que cada valor tenha sido dito PARA a intenção da ficha, e proíbe converter números.
+   No turno da troca, o nó também avisa explicitamente que valores anteriores não valem
+   (campos equivalentes já foram herdados pelo domínio). O cenário
+   `evals/cenarios/03_troca_aluguel_para_compra.json` falha se isso regredir.
+10. **Eventos de domínio** são gravados em `lead_eventos` (tipo, payload JSONB, timestamp):
    - os do pedido: `LeadCriado`, `IntencaoIdentificada`, `IntencaoAlterada`,
      `CampoQualificacaoPreenchido`, `ScoreAlterado`, `LeadQualificado`;
    - dois acrescentados: `CampoQualificacaoCorrigido` e `CampoQualificacaoRemovido`.
+
+   Eventos do mesmo passo compartilham o instante; a coluna `seq` (identity, migration
+   0006) mantém a ordem de inserção na leitura.
 
 ## Consequências
 

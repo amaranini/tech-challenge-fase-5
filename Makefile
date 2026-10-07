@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck imports test check up down logs migrate seed busca e2e
+.PHONY: install lint format typecheck imports test check up down logs migrate seed busca e2e llm
 
 install:
 	uv sync
@@ -44,3 +44,6 @@ busca:
 
 e2e:
 	uv run pytest -m e2e -v
+
+llm:
+	uv run pytest -m llm -v -s

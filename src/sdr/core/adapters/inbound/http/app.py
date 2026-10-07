@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI
 
 from sdr.core.adapters.inbound.http.dependencias import Dependencias
-from sdr.core.adapters.inbound.http.routers import conversas, health
+from sdr.core.adapters.inbound.http.routers import conversas, health, leads
 
 
 def criar_app(
@@ -28,6 +28,7 @@ def criar_app(
     app.state.dependencias = dependencias
     app.include_router(health.router)
     app.include_router(conversas.router)
+    app.include_router(leads.router)
     for router in routers:
         app.include_router(router)
     return app

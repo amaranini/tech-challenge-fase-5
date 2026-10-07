@@ -1,0 +1,61 @@
+{
+  "nome": "compra_zona_sul",
+  "descricao": "Exemplo 1 do enunciado: lead quer comprar apartamento na zona sul; a Lia qualifica a compra até a próxima ação agendar_visita.",
+  "falas": [
+    "Estou procurando apartamento na zona sul",
+    "Quero comprar",
+    "Até uns 800 mil",
+    "2 quartos",
+    "Quero me mudar nos próximos 2 meses",
+    "Vou financiar e usar meu FGTS"
+  ],
+  "esperado": {
+    "intencao": "compra",
+    "proxima_acao": "agendar_visita",
+    "classificacao": "quente",
+    "score_min": 70,
+    "ficha": {
+      "regiao": {
+        "contem": "sul"
+      },
+      "preco_max": 800000,
+      "quartos": 2,
+      "urgencia": {
+        "um_de": [
+          "imediata",
+          "ate_3_meses"
+        ]
+      },
+      "forma_pagamento": {
+        "contem_todos": [
+          "financiamento",
+          "fgts"
+        ]
+      }
+    },
+    "eventos": [
+      {
+        "tipo": "LeadCriado"
+      },
+      {
+        "tipo": "IntencaoIdentificada",
+        "payload": {
+          "intencao": "compra"
+        }
+      },
+      {
+        "tipo": "ScoreAlterado"
+      },
+      {
+        "tipo": "LeadQualificado",
+        "payload": {
+          "intencao": "compra",
+          "proxima_acao": "agendar_visita"
+        }
+      }
+    ],
+    "eventos_ausentes": [
+      "IntencaoAlterada"
+    ]
+  }
+}

@@ -55,6 +55,25 @@ curl -s 'localhost:8000/conversas/lead-ana/mensagens'   # histórico + "processa
 `make e2e` roda o aceite com o LLM real (memória, retomada e nenhum imóvel inventado).
 Detalhes em [ADR 004](docs/adr/004-agente-llm-memoria.md).
 
+### Qualificação do lead
+
+Ao lado do chat, o Streamlit mostra um **painel de qualificação** atualizado em tempo real:
+intenção (compra/aluguel/investimento), ficha sendo preenchida (✅ preenchido · ⬜ faltando),
+score 0–100 com a classificação (🔥 quente · 🌤️ morno · 🧊 frio) e os motivos, a próxima
+ação quando o lead é qualificado e a trilha de eventos. Regras de negócio em
+[docs/qualificacao-imobiliaria.md](docs/qualificacao-imobiliaria.md).
+
+```bash
+curl -s localhost:8000/leads/lead-ana | python3 -m json.tool
+# intencao, ficha (atual), fichas (todas), campos_faltantes, score, classificacao,
+# score_motivos, proxima_acao, qualificado_em e eventos (lead_eventos, em ordem); 404 se não existir
+```
+
+`make llm` roda os cenários de qualificação com o LLM real contra a API no ar
+(compra → `agendar_visita`, investimento → `encaminhar_especialista` e troca
+aluguel → compra). Os roteiros (falas do lead + estado final esperado) ficam em
+[evals/cenarios/](evals/cenarios/) e serão reaproveitados no eval do Dia 5.
+
 A API aplica as migrations (`alembic upgrade head`) ao iniciar.
 
 ## Desenvolvimento
@@ -67,3 +86,6 @@ make format      # aplica ruff fix + format
 
 Testes de integração (`tests/integration/`) usam o Postgres do compose e são pulados
 automaticamente se ele não estiver de pé (`docker compose up -d db`).
+
+Testes com o LLM real ficam fora do `make check` (custam tokens e precisam da API no ar):
+`make e2e` (`-m e2e`) e `make llm` (`-m llm`, roda os cenários de `evals/cenarios/`).

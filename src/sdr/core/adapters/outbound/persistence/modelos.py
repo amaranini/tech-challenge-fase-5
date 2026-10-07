@@ -3,8 +3,10 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
+    BigInteger,
     DateTime,
     ForeignKey,
+    Identity,
     Index,
     Integer,
     String,
@@ -80,6 +82,8 @@ class LeadEventoModel(Base):
     tipo: Mapped[str] = mapped_column(String(50))
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
     ocorrido_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Ordem de inserção: desempata eventos gravados no mesmo instante (migration 0006).
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(always=False))
 
     __table_args__ = (
         Index("ix_lead_eventos_lead_ocorrido", "lead_id", "ocorrido_em"),

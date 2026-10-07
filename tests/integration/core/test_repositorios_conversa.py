@@ -12,9 +12,11 @@ from sdr.core.adapters.outbound.persistence.repositorios_conversa_sql import (
     LeadEventoRepositorySql,
     LeadRepositorySql,
 )
+from sdr.core.application.use_cases.obter_lead import ObterLead
 from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem, Papel
 from sdr.core.domain.eventos import EventoLead, TipoEvento
 from sdr.core.domain.qualificacao import Classificacao, Qualificacao, Score
+from tests.apoio.vertical_fake import INTENCOES
 
 pytestmark = pytest.mark.integration
 
@@ -102,3 +104,42 @@ async def test_conversa_mensagens_em_ordem_e_janela(
     assert ultimas[0].metadados == {"itens_citados": [{"id": "X-2"}]}
     assert (resumo.lead.remetente_id, resumo.total_mensagens) == ("bia", 5)
     assert resumo.ultima_interacao_em == inicio + timedelta(seconds=4)
+
+
+async def test_eventos_no_mesmo_instante_mantem_a_ordem_de_insercao(
+    sessoes: async_sessionmaker[AsyncSession],
+) -> None:
+    """IntencaoAlterada e os campos herdados nascem no mesmo instante (seq desempata)."""
+    leads, eventos = LeadRepositorySql(sessoes), LeadEventoRepositorySql(sessoes)
+    lead = Lead.novo(Canal.WEB, "dani")
+    await leads.salvar(lead)
+    t = lead.criado_em
+    tipos = [
+        TipoEvento.INTENCAO_ALTERADA,
+        *[TipoEvento.CAMPO_PREENCHIDO] * 8,
+        TipoEvento.SCORE_ALTERADO,
+    ]
+
+    await eventos.registrar(
+        [EventoLead(lead.id, tipo, t, {"i": i}) for i, tipo in enumerate(tipos)]
+    )
+
+    registrados = await eventos.listar(lead.id)
+    assert [e.payload["i"] for e in registrados] == list(range(len(tipos)))
+
+
+async def test_obter_lead_com_repositorios_sql(
+    sessoes: async_sessionmaker[AsyncSession],
+) -> None:
+    leads, eventos = LeadRepositorySql(sessoes), LeadEventoRepositorySql(sessoes)
+    lead = Lead.novo(Canal.WEB, "eva")
+    q = Qualificacao(lead.id, intencao_atual="plano", fichas={"plano": {"unidade": "Centro"}})
+    await leads.salvar(replace(lead, qualificacao=q))
+    await eventos.registrar([EventoLead(lead.id, TipoEvento.LEAD_CRIADO, lead.criado_em)])
+
+    estado = await ObterLead(leads, eventos, INTENCOES).executar(Canal.WEB, "eva")
+
+    assert estado is not None
+    assert estado.lead.qualificacao == q
+    assert estado.campos_faltantes == ["orcamento", "horario"]
+    assert [e.tipo for e in estado.eventos] == [TipoEvento.LEAD_CRIADO]

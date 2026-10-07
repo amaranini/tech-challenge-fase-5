@@ -254,7 +254,7 @@ class LeadEventoRepositorySql:
                 await sessao.scalars(
                     select(LeadEventoModel)
                     .where(LeadEventoModel.lead_id == lead_id)
-                    .order_by(LeadEventoModel.ocorrido_em, LeadEventoModel.id)
+                    .order_by(LeadEventoModel.ocorrido_em, LeadEventoModel.seq)
                     .limit(limite)
                 )
             ).all()
