@@ -1,9 +1,9 @@
 """Contrato entre o core genérico de SDR e uma vertical de negócio (um segmento de mercado).
 
 O core define O QUE uma vertical precisa entregar; a vertical decide COMO.
-Hoje o contrato tem só o necessário (catálogo + rotas + carga inicial). Entram
-quando forem usados: persona/prompts e tools (Etapa C); intenções, validador da ficha
-de qualificação, scoring e especialistas (Dia 2); cadência de follow-up (Dia 3).
+Hoje o contrato tem só o necessário: catálogo, rotas, carga inicial, persona (prompt
+versionado) e ferramentas do agente. Entram quando forem usados: intenções, validador da
+ficha de qualificação, scoring e especialistas (Dia 2); cadência de follow-up (Dia 3).
 """
 
 from collections.abc import Awaitable, Callable, Sequence
@@ -15,6 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from sdr.core.application.ports.catalogo import CatalogoPort
 from sdr.core.application.ports.embedding import EmbeddingPort
+from sdr.core.application.ports.ferramenta import Ferramenta
+from sdr.core.domain.agente import Persona
 
 
 @dataclass(frozen=True)
@@ -31,6 +33,8 @@ class VerticalMontada:
 
     catalogo: CatalogoPort
     carregar_catalogo_inicial: Callable[[], Awaitable[int]]
+    persona: Persona
+    ferramentas: Sequence[Ferramenta] = field(default_factory=tuple)  # tools do agente
     routers: Sequence[APIRouter] = field(default_factory=tuple)
 
 

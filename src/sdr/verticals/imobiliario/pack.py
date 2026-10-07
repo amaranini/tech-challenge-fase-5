@@ -2,9 +2,13 @@
 
 from pathlib import Path
 
+from sdr.core.application.ferramentas.buscar_catalogo import FerramentaBuscarCatalogo
 from sdr.core.vertical import InfraCompartilhada, VerticalMontada
 from sdr.verticals.imobiliario.catalogo.adapters.carga_json import ler_imoveis_json
 from sdr.verticals.imobiliario.catalogo.adapters.catalogo_imobiliario import CatalogoImobiliario
+from sdr.verticals.imobiliario.catalogo.adapters.ferramenta_buscar_imoveis import (
+    DEFINICAO_BUSCAR_IMOVEIS,
+)
 from sdr.verticals.imobiliario.catalogo.adapters.http import criar_router
 from sdr.verticals.imobiliario.catalogo.adapters.indice_pgvector import IndiceImoveisPgvector
 from sdr.verticals.imobiliario.catalogo.adapters.interpretador_regras import InterpretadorRegras
@@ -17,6 +21,7 @@ from sdr.verticals.imobiliario.catalogo.application.use_cases.cadastrar_imoveis 
     CadastrarImoveis,
 )
 from sdr.verticals.imobiliario.config import SettingsImobiliario
+from sdr.verticals.imobiliario.persona.lia import carregar_persona
 
 CATALOGO_INICIAL = Path(__file__).resolve().parent / "dados" / "imoveis.json"
 
@@ -50,8 +55,11 @@ class PackImobiliario:
         async def carregar_catalogo_inicial() -> int:
             return await cadastrar_imoveis.executar(ler_imoveis_json(self._catalogo_inicial))
 
+        catalogo = CatalogoImobiliario(buscar_imoveis, repositorio)
         return VerticalMontada(
-            catalogo=CatalogoImobiliario(buscar_imoveis, repositorio),
+            catalogo=catalogo,
             carregar_catalogo_inicial=carregar_catalogo_inicial,
-            routers=[criar_router(buscar_imoveis)],
+            persona=carregar_persona(self._settings.versao_prompt),
+            ferramentas=[FerramentaBuscarCatalogo(catalogo, DEFINICAO_BUSCAR_IMOVEIS)],
+            routers=[criar_router(buscar_imoveis, repositorio)],
         )

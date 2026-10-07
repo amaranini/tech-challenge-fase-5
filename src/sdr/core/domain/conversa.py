@@ -1,0 +1,99 @@
+"""Lead, Conversa e Mensagem — o coração genérico de um SDR conversacional."""
+
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
+from enum import StrEnum
+from uuid import UUID, uuid4
+
+
+def agora() -> datetime:
+    return datetime.now(UTC)
+
+
+class Canal(StrEnum):
+    WEB = "web"
+    WHATSAPP = "whatsapp"
+
+
+class Papel(StrEnum):
+    LEAD = "lead"
+    AGENTE = "agente"
+
+
+class StatusConversa(StrEnum):
+    ABERTA = "aberta"
+    ENCERRADA = "encerrada"
+
+
+@dataclass(frozen=True)
+class Lead:
+    """Pessoa atendida, identificada pelo canal + id do remetente nesse canal.
+
+    `ficha_qualificacao` é opaca para o core (JSONB): o schema é da vertical.
+    """
+
+    id: UUID
+    canal: Canal
+    remetente_id: str
+    criado_em: datetime
+    nome: str | None = None
+    ficha_qualificacao: Mapping[str, object] = field(default_factory=dict)
+
+    @classmethod
+    def novo(cls, canal: Canal, remetente_id: str, nome: str | None = None) -> "Lead":
+        if not remetente_id.strip():
+            raise ValueError("remetente_id é obrigatório")
+        return cls(id=uuid4(), canal=canal, remetente_id=remetente_id, criado_em=agora(), nome=nome)
+
+
+@dataclass(frozen=True)
+class Conversa:
+    id: UUID
+    lead_id: UUID
+    canal: Canal
+    iniciada_em: datetime
+    atualizada_em: datetime
+    status: StatusConversa = StatusConversa.ABERTA
+
+    @classmethod
+    def nova(cls, lead: Lead) -> "Conversa":
+        momento = agora()
+        return cls(
+            id=uuid4(),
+            lead_id=lead.id,
+            canal=lead.canal,
+            iniciada_em=momento,
+            atualizada_em=momento,
+        )
+
+    def tocar(self, momento: datetime) -> "Conversa":
+        return replace(self, atualizada_em=momento)
+
+
+@dataclass(frozen=True)
+class Mensagem:
+    id: UUID
+    conversa_id: UUID
+    papel: Papel
+    texto: str
+    criada_em: datetime
+    metadados: Mapping[str, object] = field(default_factory=dict)
+
+    @classmethod
+    def nova(
+        cls,
+        conversa_id: UUID,
+        papel: Papel,
+        texto: str,
+        metadados: Mapping[str, object] | None = None,
+        criada_em: datetime | None = None,
+    ) -> "Mensagem":
+        return cls(
+            id=uuid4(),
+            conversa_id=conversa_id,
+            papel=papel,
+            texto=texto,
+            criada_em=criada_em or agora(),
+            metadados=dict(metadados or {}),
+        )

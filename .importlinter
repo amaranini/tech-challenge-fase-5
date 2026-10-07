@@ -39,13 +39,13 @@ layers =
 
 # 4. Hexágono de cada fatia da vertical + pack no topo da vertical.
 [importlinter:contract:camadas-vertical-imobiliario]
-name = Vertical imobiliária (pack <- config | catalogo)
+name = Vertical imobiliária (pack <- config | catalogo | persona)
 type = layers
 containers =
     sdr.verticals.imobiliario
 layers =
     pack
-    config | catalogo
+    config | catalogo | persona
 
 [importlinter:contract:camadas-fatias-imobiliario]
 name = Hexágono das fatias da vertical imobiliária (domain <- application <- adapters)
@@ -81,6 +81,9 @@ forbidden_modules =
     onnxruntime
     numpy
     pgvector
+    openai
+    langgraph
+    langchain_core
 
 # 6. Adapters de entrada e de saída do core não se conhecem.
 [importlinter:contract:adapters-independentes]

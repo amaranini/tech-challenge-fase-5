@@ -2,9 +2,9 @@ import httpx
 import pytest
 
 from sdr.core.adapters.inbound.http.app import criar_app
-from sdr.core.adapters.inbound.http.dependencias import Dependencias
 from sdr.core.application.ports.saude import ResultadoVerificacao
 from sdr.core.application.use_cases.verificar_saude import VerificarSaude
+from tests.apoio.http import criar_dependencias
 
 
 class VerificadorFake:
@@ -20,7 +20,9 @@ class VerificadorFake:
     [(True, 200, "ok"), (False, 503, "degradado")],
 )
 async def test_health(ok: bool, status_http: int, status_corpo: str) -> None:
-    app = criar_app(Dependencias(verificar_saude=lambda: VerificarSaude([VerificadorFake(ok)])))
+    app = criar_app(
+        criar_dependencias(verificar_saude=lambda: VerificarSaude([VerificadorFake(ok)]))
+    )
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://teste"

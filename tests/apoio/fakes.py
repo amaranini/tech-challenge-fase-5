@@ -4,6 +4,24 @@ import hashlib
 import math
 import re
 from collections.abc import Sequence
+from uuid import UUID
+
+from sdr.core.application.ports.agente import EntradaAgente
+from sdr.core.application.ports.llm import (
+    ChamadaFerramenta,
+    DefinicaoFerramenta,
+    MensagemLLM,
+    RespostaLLM,
+)
+from sdr.core.application.ports.repositorios import ResumoLead
+from sdr.core.domain.agente import RespostaAgente
+from sdr.core.domain.catalogo import (
+    ConsultaCatalogo,
+    ConsultaInvalidaError,
+    ItemCatalogo,
+    ResultadoCatalogo,
+)
+from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem
 
 DIMENSAO_FAKE = 64
 
@@ -35,3 +53,119 @@ class EmbeddingFake:
     async def gerar_consulta(self, texto: str) -> list[float]:
         self.consultas.append(texto)
         return self._vetor(texto)
+
+
+# ---------------------------------------------------------------- conversa / agente
+
+
+class LLMRoteirizado:
+    """LLM fake que devolve respostas pré-definidas, em ordem, e registra as chamadas."""
+
+    def __init__(self, *respostas: RespostaLLM) -> None:
+        self._respostas = list(respostas)
+        self.chamadas: list[tuple[list[MensagemLLM], list[DefinicaoFerramenta], bool]] = []
+
+    @property
+    def modelo(self) -> str:
+        return "fake-1"
+
+    async def gerar(
+        self,
+        mensagens: Sequence[MensagemLLM],
+        ferramentas: Sequence[DefinicaoFerramenta] = (),
+        forcar_texto: bool = False,
+    ) -> RespostaLLM:
+        self.chamadas.append((list(mensagens), list(ferramentas), forcar_texto))
+        if not self._respostas:
+            raise AssertionError("LLM fake sem respostas restantes")
+        return self._respostas.pop(0)
+
+
+def texto(conteudo: str, tokens: int = 10) -> RespostaLLM:
+    return RespostaLLM(
+        conteudo=conteudo, modelo="fake-1", tokens_entrada=tokens, tokens_saida=tokens
+    )
+
+
+def chamar(nome: str, id_chamada: str = "c1", **argumentos: object) -> RespostaLLM:
+    return RespostaLLM(
+        conteudo="",
+        chamadas=(ChamadaFerramenta(id_chamada, nome, argumentos),),
+        modelo="fake-1",
+        tokens_entrada=5,
+        tokens_saida=5,
+    )
+
+
+class CatalogoFake:
+    def __init__(self, *itens: ItemCatalogo) -> None:
+        self.itens = {i.id: i for i in itens}
+        self.consultas: list[ConsultaCatalogo] = []
+
+    async def buscar(self, consulta: ConsultaCatalogo) -> list[ResultadoCatalogo]:
+        self.consultas.append(consulta)
+        if consulta.filtros.get("invalido"):
+            raise ConsultaInvalidaError("filtro 'invalido' não existe")
+        itens = list(self.itens.values())[: consulta.limite]
+        return [ResultadoCatalogo(i, 0.9) for i in itens]
+
+    async def obter(self, ids: Sequence[str]) -> list[ItemCatalogo]:
+        return [self.itens[i] for i in ids if i in self.itens]
+
+
+def item(id_: str, titulo: str = "Item") -> ItemCatalogo:
+    return ItemCatalogo(id=id_, titulo=titulo, resumo=f"resumo de {id_}", atributos={"preco": 1})
+
+
+class LeadRepositoryFake:
+    def __init__(self) -> None:
+        self.leads: dict[UUID, Lead] = {}
+
+    async def obter_por_remetente(self, canal: Canal, remetente_id: str) -> Lead | None:
+        return next(
+            (
+                ld
+                for ld in self.leads.values()
+                if ld.canal is canal and ld.remetente_id == remetente_id
+            ),
+            None,
+        )
+
+    async def salvar(self, lead: Lead) -> None:
+        self.leads[lead.id] = lead
+
+    async def listar(self, canal: Canal | None, limite: int) -> list[ResumoLead]:
+        return [ResumoLead(ld, 0, None) for ld in self.leads.values() if canal in (None, ld.canal)]
+
+
+class ConversaRepositoryFake:
+    def __init__(self) -> None:
+        self.conversas: dict[UUID, Conversa] = {}
+        self.mensagens: list[Mensagem] = []
+
+    async def obter_aberta(self, lead_id: UUID) -> Conversa | None:
+        return next((c for c in self.conversas.values() if c.lead_id == lead_id), None)
+
+    async def salvar(self, conversa: Conversa) -> None:
+        self.conversas[conversa.id] = conversa
+
+    async def adicionar_mensagem(self, mensagem: Mensagem) -> None:
+        self.mensagens.append(mensagem)
+
+    async def ultimas_mensagens(self, conversa_id: UUID, limite: int) -> list[Mensagem]:
+        return [m for m in self.mensagens if m.conversa_id == conversa_id][-limite:]
+
+
+class AgenteRoteirizado:
+    """Agente fake: devolve respostas pré-definidas e guarda as entradas recebidas."""
+
+    def __init__(self, *respostas: RespostaAgente | Exception) -> None:
+        self._respostas = list(respostas)
+        self.entradas: list[EntradaAgente] = []
+
+    async def responder(self, entrada: EntradaAgente) -> RespostaAgente:
+        self.entradas.append(entrada)
+        resposta = self._respostas.pop(0)
+        if isinstance(resposta, Exception):
+            raise resposta
+        return resposta

@@ -13,6 +13,8 @@ dependencies = [
     "alembic>=1.14",
     "fastembed>=0.8.1",
     "pgvector>=0.5.0",
+    "openai>=3.24.0",
+    "langgraph>=1.2.14",
 ]
 
 [dependency-groups]
@@ -65,6 +67,8 @@ testpaths = ["tests"]
 pythonpath = ["src", "."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+addopts = "-m 'not e2e'"
 markers = [
     "integration: requer Postgres rodando (docker compose up db)",
+    "e2e: conversa real com o LLM via API no ar (custa tokens) — `make e2e`",
 ]

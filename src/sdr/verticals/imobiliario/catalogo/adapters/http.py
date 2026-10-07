@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from sdr.verticals.imobiliario.catalogo.adapters.esquema_filtros import Filtros
+from sdr.verticals.imobiliario.catalogo.application.ports import ImovelRepository
 from sdr.verticals.imobiliario.catalogo.application.use_cases.buscar_imoveis import (
     BuscarImoveis,
     ConsultaImoveis,
@@ -86,7 +87,7 @@ class BuscaResposta(BaseModel):
     resultados: list[ImovelResposta]
 
 
-def criar_router(buscar_imoveis: BuscarImoveis) -> APIRouter:
+def criar_router(buscar_imoveis: BuscarImoveis, repositorio: ImovelRepository) -> APIRouter:
     """Rotas da vertical; o caso de uso chega já montado pelo PackImobiliario."""
     router = APIRouter(prefix="/imoveis", tags=["imóveis"])
 
@@ -108,5 +109,12 @@ def criar_router(buscar_imoveis: BuscarImoveis) -> APIRouter:
             total=len(resultado.imoveis),
             resultados=[ImovelResposta.de_dominio(e) for e in resultado.imoveis],
         )
+
+    @router.get("/{codigo}", response_model=ImovelResposta)
+    async def obter(codigo: str) -> ImovelResposta:
+        imovel = await repositorio.obter(codigo)
+        if imovel is None:
+            raise HTTPException(404, f"imóvel {codigo} não existe")
+        return ImovelResposta.de_dominio(ImovelEncontrado(imovel))
 
     return router

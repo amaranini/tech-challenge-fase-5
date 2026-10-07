@@ -5,7 +5,9 @@ Este documento descreve como o sistema é organizado. Ele se apoia em três deci
 - **hexagonal (Ports & Adapters):** [ADR 001](adr/001-arquitetura-hexagonal.md);
 - **busca híbrida com embeddings locais:** [ADR 002](adr/002-busca-hibrida-embeddings-locais.md);
 - **core de SDR genérico separado das verticais de negócio:**
-  [ADR 003](adr/003-core-multi-segmento.md).
+  [ADR 003](adr/003-core-multi-segmento.md);
+- **agente com LLM por port, LangGraph como orquestrador e memória no banco:**
+  [ADR 004](adr/004-agente-llm-memoria.md).
 
 ## 1. Contexto
 
@@ -22,13 +24,13 @@ flowchart LR
         sistema[Lia — consultora virtual<br/>qualifica, busca imóveis, agenda]
     end
 
-    anthropic[(Anthropic API<br/>LLM)]
+    openai[(OpenAI API<br/>LLM)]
     whatsapp[(WhatsApp<br/>Twilio)]
     langfuse[(Langfuse<br/>observabilidade)]
 
     lead -- chat web --> sistema
     lead -. WhatsApp .-> whatsapp -. webhook .-> sistema
-    sistema -- gera respostas --> anthropic
+    sistema -- gera respostas --> openai
     sistema -. resumo do lead + visita .-> corretor
     gestor -. dashboard .-> sistema
     sistema -. traces .-> langfuse
@@ -48,13 +50,13 @@ flowchart TB
     subgraph core[sdr.core — NÃO conhece imóvel]
         contrato{{vertical.py<br/>VerticalPack · InfraCompartilhada · VerticalMontada}}
         cport{{CatalogoPort<br/>ConsultaCatalogo → ResultadoCatalogo · ItemCatalogo}}
-        infra[adapters genéricos<br/>HTTP app · engine/Base ORM · embeddings · LLM/agente]
+        infra[adapters genéricos<br/>HTTP app · engine/Base ORM · embeddings · LLM OpenAI · agente LangGraph]
     end
 
     subgraph vert[sdr.verticals.imobiliario]
         pack[[pack.py — PackImobiliario<br/>composition root da vertical]]
         cat[catalogo/<br/>Imovel · BuscarImoveis · índice pgvector<br/>CatalogoImobiliario · rota /imoveis/busca]
-        persona[persona/ — Lia + prompts]:::futuro
+        persona[persona/ — Lia + prompts versionados]
         qualif[qualificacao/ — ficha Pydantic, scoring]:::futuro
     end
 
@@ -63,7 +65,8 @@ flowchart TB
     pack -. implementa .-> contrato
     pack --> cat
     cat -. "CatalogoImobiliario implementa" .-> cport
-    pack -- "3. VerticalMontada: catalogo, routers, carga inicial" --> boot
+    pack --> persona
+    pack -- "3. VerticalMontada: catalogo, persona, ferramentas, routers, carga inicial" --> boot
 
     classDef futuro stroke-dasharray: 5 5
 ```
@@ -86,18 +89,19 @@ flowchart TB
 
     subgraph core[sdr.core]
         subgraph cin[adapters/inbound]
-            http[http — app FastAPI + /health]
+            http[http — app FastAPI<br/>/health · /conversas · /leads]
         end
         subgraph capp[application — sem frameworks]
-            cuc[use_cases<br/>VerificarSaude · ProcessarMensagemRecebida*]
-            cports{{ports<br/>CatalogoPort · EmbeddingPort · VerificadorSaudePort<br/>LLMPort* · LeadRepository* · ConversaRepository*<br/>AgenteConversacionalPort* · CanalMensagemPort*}}
+            cuc[use_cases<br/>ProcessarMensagemRecebida · ObterHistorico<br/>ListarLeads · VerificarSaude]
+            cports{{ports<br/>CatalogoPort · EmbeddingPort · LLMPort · Ferramenta<br/>LeadRepository · ConversaRepository<br/>AgenteConversacionalPort · CanalMensagemPort*}}
+            cferr[ferramentas<br/>FerramentaBuscarCatalogo]
         end
-        cdom[domain — sem frameworks<br/>ItemCatalogo · Lead* · Conversa* · Mensagem*<br/>Qualificacao* · Score* · Agendamento*]
+        cdom[domain — sem frameworks<br/>Lead · Conversa · Mensagem · Persona · ItemCatalogo<br/>Qualificacao* · Score* · Agendamento*]
         subgraph cout[adapters/outbound]
-            persist[persistence<br/>engine · Base ORM]
+            persist[persistence<br/>engine · Base ORM · leads/conversas/mensagens]
             emb[embeddings<br/>fastembed]
-            llm[llm — Anthropic*]
-            agent[agent — LangGraph*]
+            llm[llm — OpenAI]
+            agent[agent — LangGraph]
         end
     end
 
@@ -108,7 +112,7 @@ flowchart TB
     end
 
     pg[(Postgres + pgvector)]
-    claude[(Anthropic API)]
+    openaiapi[(OpenAI API)]
 
     web -- HTTP --> http
     wpp -.-> http
@@ -118,7 +122,8 @@ flowchart TB
     emb -. implementa .-> cports
     llm -. implementa .-> cports
     agent -. implementa .-> cports
-    agent -- "tool buscar_catalogo*" --> cports
+    agent -- "executa tools" --> cferr
+    cferr -- CatalogoPort --> cports
 
     vad --> vapp --> vdom
     vad -. "CatalogoImobiliario implementa" .-> cports
@@ -128,12 +133,12 @@ flowchart TB
 
     persist --> pg
     vad --> pg
-    llm --> claude
+    llm --> openaiapi
 
     classDef futuro stroke-dasharray: 5 5
 ```
 
-`*` = chega na Etapa C ou depois.
+`*` = chega nos próximos dias do cronograma.
 
 ### Regra de dependência
 
@@ -183,7 +188,9 @@ sequenceDiagram
     B->>P: montar(InfraCompartilhada(sessoes, embedding))
     P->>P: valida dimensão do embedding × coluna vector(384)
     P->>P: instancia repositório, índice pgvector, interpretador, casos de uso
-    P-->>B: VerticalMontada(catalogo, routers=[/imoveis/busca], carregar_catalogo_inicial)
+    P-->>B: VerticalMontada(catalogo, persona Lia, ferramentas=[buscar_imoveis], routers, carga)
+    B->>B: LLMOpenAI (LLM_PROVIDER) + AgenteLangGraph(llm, persona, ferramentas)
+    B->>B: ProcessarMensagemRecebida(leads, conversas, agente, catalogo, persona)
     B->>A: criar_app(Dependencias, routers=vertical.routers)
 ```
 
@@ -211,7 +218,43 @@ Os próximos fluxos seguem o mesmo desenho: o router só traduz HTTP ↔ caso de
 de um lead, venha do chat web ou do WhatsApp, vira um `MensagemRecebida` e entra no mesmo
 `ProcessarMensagemRecebida`, do core.
 
-## 6. Busca híbrida de imóveis (`POST /imoveis/busca`, rota da vertical)
+## 6. Mensagem do lead → resposta da Lia (`POST /conversas/mensagens`)
+
+```mermaid
+sequenceDiagram
+    participant W as Streamlit (canal web)
+    participant R as router conversas (core)
+    participant U as ProcessarMensagemRecebida (core)
+    participant DB as Lead/ConversaRepository
+    participant G as AgenteLangGraph (core)
+    participant L as LLMOpenAI (core)
+    participant T as FerramentaBuscarCatalogo → CatalogoPort
+    participant V as CatalogoImobiliario (vertical)
+
+    W->>R: {lead_id, texto}
+    R->>U: MensagemRecebida(canal=web, remetente_id=lead_id, texto)
+    U->>DB: obter/criar Lead e Conversa aberta; últimas N mensagens
+    U->>DB: grava mensagem do LEAD (antes do LLM)
+    U->>G: responder(lead, histórico, texto)
+    G->>L: persona + contexto + histórico (+ lembrete de itens já citados), tools
+    L-->>G: tool_call buscar_imoveis(texto, filtros)
+    G->>T: executar(argumentos)
+    T->>V: buscar(ConsultaCatalogo) → BuscarImoveis (busca híbrida)
+    V-->>T: ItemCatalogo[] (IMV-xxx)
+    T-->>G: JSON com itens
+    G->>L: histórico + resultado da tool
+    L-->>G: texto curto citando IMV-001, IMV-005...
+    G-->>U: RespostaAgente(texto, itens consultados, tokens)
+    U->>V: códigos citados existem? (obter) — senão 1 correção, depois fallback
+    U->>DB: grava mensagem da LIA (itens citados, prompt_versao, modelo, tokens)
+    U-->>R: ResultadoProcessamento
+    R-->>W: {resposta, itens_sugeridos}
+```
+
+Reabrir o mesmo `lead_id` reencontra o mesmo Lead (canal + remetente) e a conversa aberta.
+O histórico vem do banco, que é a fonte única da memória.
+
+## 7. Busca híbrida de imóveis (`POST /imoveis/busca`, rota da vertical)
 
 ```mermaid
 sequenceDiagram
@@ -238,7 +281,7 @@ sequenceDiagram
     R-->>C: 200 {criterios_aplicados, total, resultados}
 ```
 
-**Pelo core (Etapa C em diante).** O agente não conhece `/imoveis/busca`: ele usa o
+**Pelo core (agente).** O agente não conhece `/imoveis/busca`: ele usa o
 `CatalogoPort`. O `CatalogoImobiliario` valida os filtros (chaves desconhecidas são
 rejeitadas), chama o mesmo `BuscarImoveis` e devolve `ItemCatalogo` com `resumo` e
 `atributos`.
@@ -249,11 +292,12 @@ rejeitadas), chama o mesmo `BuscarImoveis` e devolve `ItemCatalogo` com `resumo`
 2. `EmbeddingPort.gerar_documentos(texto_semantico)` gera os vetores;
 3. `IndiceImoveisPort.indexar` grava os vetores no índice.
 
-## 7. Implantação local
+## 8. Implantação local
 
 ```mermaid
 flowchart LR
     browser([Navegador]) -- :8501 --> web[web<br/>Streamlit]
     web -- http://api:8000 --> api[api<br/>FastAPI + uvicorn<br/>alembic upgrade no start<br/>VERTICAL=imobiliario]
     api --> db[(db<br/>pgvector/pg16<br/>host :5433)]
+    api --> oai[(OpenAI API)]
 ```

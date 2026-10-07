@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck imports test check up down logs migrate seed busca
+.PHONY: install lint format typecheck imports test check up down logs migrate seed busca e2e
 
 install:
 	uv sync
@@ -41,3 +41,6 @@ q ?= apê 2 quartos zona sul até 800 mil perto do metrô
 busca:
 	@curl -s localhost:8000/imoveis/busca -H 'content-type: application/json' \
 		-d '{"texto": "$(q)", "limite": 5}' | python3 -m json.tool
+
+e2e:
+	uv run pytest -m e2e -v

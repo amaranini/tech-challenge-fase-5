@@ -15,7 +15,7 @@ escolhida por `VERTICAL` no `.env`.
 ## Rodando
 
 ```bash
-cp .env.example .env
+cp .env.example .env   # preencha OPENAI_API_KEY
 docker compose up -d --build --wait
 make seed        # carrega o catálogo da vertical (60 imóveis fictícios) + embeddings
 make busca q="apê 2 quartos zona sul até 800 mil perto do metrô"
@@ -27,7 +27,7 @@ A primeira build baixa o modelo de embeddings (~220 MB) para dentro da imagem.
 |---|---|
 | API (FastAPI) | http://localhost:8000 — docs em `/docs` |
 | Health check | http://localhost:8000/health |
-| Web (Streamlit) | http://localhost:8501 |
+| Web (Streamlit) — chat com a Lia | http://localhost:8501 |
 | Postgres + pgvector | `localhost:5433` (usuário/senha/db: `sdr`) |
 
 ### Busca de imóveis
@@ -39,6 +39,20 @@ explícitos em `filtros`) + similaridade semântica. Veja o schema em `/docs` e 
 ```json
 {"texto": "apê 2 quartos zona sul até 800 mil perto do metrô", "filtros": {"aceita_pet": true}, "limite": 5}
 ```
+
+### Conversa com a Lia
+
+No Streamlit, crie ou escolha um `lead_id` na barra lateral e converse. Reabrir o mesmo
+`lead_id` continua a conversa de onde parou. Pela API:
+
+```bash
+curl -s localhost:8000/conversas/mensagens -H 'content-type: application/json' \
+  -d '{"lead_id": "lead-ana", "texto": "Oi! Procuro um apê de 2 quartos na zona sul"}'
+curl -s 'localhost:8000/conversas/mensagens?lead_id=lead-ana'   # histórico
+```
+
+`make e2e` roda o aceite com o LLM real (memória, retomada e nenhum imóvel inventado).
+Detalhes em [ADR 004](docs/adr/004-agente-llm-memoria.md).
 
 A API aplica as migrations (`alembic upgrade head`) ao iniciar.
 

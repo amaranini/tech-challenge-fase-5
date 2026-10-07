@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +19,17 @@ class Settings(BaseSettings):
     embedding_dimensao: int = 384
     embedding_cache_dir: str | None = ".cache/fastembed"
     embedding_carregar_no_inicio: bool = False
+
+    # LLM (provedor escolhido no bootstrap)
+    llm_provider: str = "openai"
+    llm_modelo: str = "gpt-4.1-mini"
+    llm_temperatura: float | None = 0.4
+    llm_timeout_s: float = 40.0
+    openai_api_key: SecretStr | None = None
+
+    # Agente
+    agente_max_passos: int = 4  # máximo de rodadas LLM ↔ ferramentas por mensagem
+    conversa_janela_historico: int = 30  # mensagens anteriores enviadas ao agente
 
 
 @lru_cache
