@@ -29,6 +29,7 @@ from sdr.core.domain.agenda import (
     StatusAgendamento,
 )
 from sdr.core.domain.agente import RespostaAgente
+from sdr.core.domain.atendimento import Atendimento, EstadoAtendimento
 from sdr.core.domain.catalogo import (
     ConsultaCatalogo,
     ConsultaInvalidaError,
@@ -153,6 +154,8 @@ def item(id_: str, titulo: str = "Item") -> ItemCatalogo:
 
 
 class LeadRepositoryFake:
+    """`salvar` não mexe no atendimento (como o repositório SQL): só `salvar_atendimento`."""
+
     def __init__(self) -> None:
         self.leads: dict[UUID, Lead] = {}
 
@@ -170,10 +173,29 @@ class LeadRepositoryFake:
         )
 
     async def salvar(self, lead: Lead) -> None:
-        self.leads[lead.id] = lead
+        anterior = self.leads.get(lead.id)
+        atendimento = anterior.atendimento if anterior else lead.atendimento
+        self.leads[lead.id] = replace(lead, atendimento=atendimento)
 
     async def listar(self, canal: Canal | None, limite: int) -> list[ResumoLead]:
         return [ResumoLead(ld, 0, None) for ld in self.leads.values() if canal in (None, ld.canal)]
+
+    async def salvar_atendimento(
+        self, atendimento: Atendimento, esperado: EstadoAtendimento
+    ) -> bool:
+        lead = self.leads.get(atendimento.lead_id)
+        if lead is None or lead.atendimento_atual.estado is not esperado:
+            return False
+        self.leads[lead.id] = replace(lead, atendimento=atendimento)
+        return True
+
+    async def listar_por_atendimento(
+        self, estados: Sequence[EstadoAtendimento], limite: int = 100
+    ) -> list[Lead]:
+        na_fila = [ld for ld in self.leads.values() if ld.atendimento_atual.estado in estados]
+        return sorted(na_fila, key=lambda ld: ld.atendimento_atual.na_fila_desde or ld.criado_em)[
+            :limite
+        ]
 
 
 class ConversaRepositoryFake:

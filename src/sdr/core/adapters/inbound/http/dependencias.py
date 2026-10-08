@@ -3,6 +3,12 @@ from dataclasses import dataclass
 
 from fastapi import Request
 
+from sdr.core.application.use_cases.atendimento import (
+    AssumirAtendimento,
+    DevolverAtendimento,
+    EnviarMensagemResponsavel,
+    ListarAtendimentos,
+)
 from sdr.core.application.use_cases.consultar_agenda_e_resumo import (
     ListarAgendamentos,
     ObterResumo,
@@ -27,6 +33,10 @@ class Dependencias:
     obter_lead: Callable[[], ObterLead]
     obter_resumo: Callable[[], ObterResumo]
     listar_agendamentos: Callable[[], ListarAgendamentos]
+    listar_atendimentos: Callable[[], ListarAtendimentos]
+    assumir_atendimento: Callable[[], AssumirAtendimento]
+    devolver_atendimento: Callable[[], DevolverAtendimento]
+    enviar_mensagem_responsavel: Callable[[], EnviarMensagemResponsavel]
 
 
 def obter_dependencias(request: Request) -> Dependencias:
@@ -60,3 +70,19 @@ def obter_obter_resumo(request: Request) -> ObterResumo:
 
 def obter_listar_agendamentos(request: Request) -> ListarAgendamentos:
     return obter_dependencias(request).listar_agendamentos()
+
+
+def obter_listar_atendimentos(request: Request) -> ListarAtendimentos:
+    return obter_dependencias(request).listar_atendimentos()
+
+
+def obter_assumir_atendimento(request: Request) -> AssumirAtendimento:
+    return obter_dependencias(request).assumir_atendimento()
+
+
+def obter_devolver_atendimento(request: Request) -> DevolverAtendimento:
+    return obter_dependencias(request).devolver_atendimento()
+
+
+def obter_enviar_mensagem_responsavel(request: Request) -> EnviarMensagemResponsavel:
+    return obter_dependencias(request).enviar_mensagem_responsavel()

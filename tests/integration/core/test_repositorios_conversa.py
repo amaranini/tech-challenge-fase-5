@@ -1,7 +1,7 @@
 """Lead/Conversa/Mensagem contra Postgres real (banco sdr_test)."""
 
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -13,6 +13,7 @@ from sdr.core.adapters.outbound.persistence.repositorios_conversa_sql import (
     LeadRepositorySql,
 )
 from sdr.core.application.use_cases.obter_lead import ObterLead
+from sdr.core.domain.atendimento import Atendimento, EstadoAtendimento, MotivoHandoff
 from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem, Papel
 from sdr.core.domain.eventos import EventoLead, TipoEvento
 from sdr.core.domain.qualificacao import Classificacao, Qualificacao, Score
@@ -82,7 +83,7 @@ async def test_conversa_mensagens_em_ordem_e_janela(
     await conversas.salvar(conversa)
     inicio = conversa.iniciada_em
     for n in range(5):
-        papel = Papel.LEAD if n % 2 == 0 else Papel.AGENTE
+        papel = Papel.LEAD if n % 2 == 0 else Papel.ASSISTENTE
         await conversas.adicionar_mensagem(
             Mensagem.nova(
                 conversa.id,
@@ -143,3 +144,60 @@ async def test_obter_lead_com_repositorios_sql(
     assert estado.lead.qualificacao == q
     assert estado.campos_faltantes == ["orcamento", "horario"]
     assert [e.tipo for e in estado.eventos] == [TipoEvento.LEAD_CRIADO]
+
+
+async def test_atendimento_compare_and_set_e_fila(
+    sessoes: async_sessionmaker[AsyncSession],
+) -> None:
+    repo = LeadRepositorySql(sessoes)
+    a, b = Lead.novo(Canal.WEB, "fila-a"), Lead.novo(Canal.WEB, "fila-b")
+    await repo.salvar(a)
+    await repo.salvar(b)
+    agora = datetime.now(UTC)
+    na_fila_a = Atendimento(
+        a.id,
+        EstadoAtendimento.AGUARDANDO_HUMANO,
+        agora,
+        agora - timedelta(minutes=5),
+        MotivoHandoff.FRUSTRACAO,
+    )
+    na_fila_b = Atendimento(b.id, EstadoAtendimento.AGUARDANDO_HUMANO, agora, agora)
+
+    assert await repo.salvar_atendimento(na_fila_a, esperado=EstadoAtendimento.ATENDIMENTO_IA)
+    assert await repo.salvar_atendimento(na_fila_b, esperado=EstadoAtendimento.ATENDIMENTO_IA)
+    # quem leu o estado antigo não sobrescreve
+    assert not await repo.salvar_atendimento(
+        Atendimento(a.id), esperado=EstadoAtendimento.ATENDIMENTO_IA
+    )
+
+    lido = await repo.obter(a.id)
+    assert lido is not None
+    assert lido.atendimento == na_fila_a
+    fila = await repo.listar_por_atendimento([EstadoAtendimento.AGUARDANDO_HUMANO])
+    assert [ld.remetente_id for ld in fila] == ["fila-a", "fila-b"]  # quem espera há mais tempo
+
+    # salvar o lead (qualificação/agenda) não mexe no atendimento
+    await repo.salvar(a)
+    relido = await repo.obter(a.id)
+    assert relido is not None
+    assert relido.atendimento_atual.estado is EstadoAtendimento.AGUARDANDO_HUMANO
+
+
+async def test_mensagem_do_responsavel_persiste_com_o_papel(
+    sessoes: async_sessionmaker[AsyncSession],
+) -> None:
+    leads, conversas = LeadRepositorySql(sessoes), ConversaRepositorySql(sessoes)
+    lead = Lead.novo(Canal.WEB, "papel-responsavel")
+    await leads.salvar(lead)
+    conversa = Conversa.nova(lead)
+    await conversas.salvar(conversa)
+    await conversas.adicionar_mensagem(
+        Mensagem.nova(
+            conversa.id,
+            Papel.RESPONSAVEL,
+            "Oi, aqui é o Rafael",
+            metadados={"responsavel": "Rafael"},
+        )
+    )
+    [lida] = await conversas.ultimas_mensagens(conversa.id, 10)
+    assert (lida.papel, lida.metadados["responsavel"]) == (Papel.RESPONSAVEL, "Rafael")

@@ -1,0 +1,53 @@
+{
+  "nome": "pedido_fora_da_base_vira_visita",
+  "descricao": "O lead pede algo que a base não tem (fotos). A Lia não inventa nem promete que alguém vai mandar: diz com honestidade que não tem e oferece conhecer o imóvel com um corretor. O lead aceita e o agendamento sai — antes de qualificar, sem se perder.",
+  "falas": [
+    "Quero comprar um apartamento na zona oeste até 700 mil",
+    {
+      "texto": "Tem fotos do primeiro?",
+      "esperado": {
+        "resposta_nao_contem": [
+          "tenho sim",
+          "vou pedir",
+          "te envio",
+          "te mando",
+          "vou enviar",
+          "enviar as fotos",
+          "quartos"
+        ]
+      }
+    },
+    {
+      "texto": "Sim, quero ver pessoalmente",
+      "esperado": {
+        "eventos_ausentes": [
+          "AgendamentoCriado"
+        ]
+      }
+    },
+    {
+      "texto": "Pode ser a primeira opção",
+      "esperado": {
+        "eventos_ausentes": [
+          "AgendamentoCriado"
+        ]
+      }
+    },
+    "Sim"
+  ],
+  "esperado": {
+    "intencao": "compra",
+    "eventos": [
+      {
+        "tipo": "AgendamentoCriado",
+        "payload": {
+          "tipo": "visita_imovel",
+          "responsavel_titulo": "corretora da zona oeste"
+        }
+      }
+    ],
+    "contagem_eventos": {
+      "AgendamentoCriado": 1
+    }
+  }
+}

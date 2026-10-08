@@ -15,6 +15,7 @@ from sdr.core.adapters.outbound.persistence.modelos import (
 )
 from sdr.core.application.ports.repositorios import ResumoLead
 from sdr.core.domain.agenda import NegociacaoAgenda, Operacao, Proposta, Slot
+from sdr.core.domain.atendimento import Atendimento, EstadoAtendimento, MotivoHandoff
 from sdr.core.domain.conversa import (
     Canal,
     Conversa,
@@ -99,6 +100,34 @@ def negociacao_de_json(dados: Mapping[str, Any] | None) -> NegociacaoAgenda:
     )
 
 
+def _atendimento(m: LeadModel) -> Atendimento:
+    dados = m.atendimento or {}
+    desde = dados.get("desde")
+    motivo = dados.get("motivo")
+    return Atendimento(
+        lead_id=m.id,
+        estado=EstadoAtendimento(m.atendimento_estado),
+        desde=datetime.fromisoformat(desde) if desde else None,
+        na_fila_desde=m.na_fila_desde,
+        motivo=MotivoHandoff(motivo) if motivo else None,
+        responsavel=dados.get("responsavel"),
+        respostas_ambiguas=int(dados.get("respostas_ambiguas", 0)),
+    )
+
+
+def _atendimento_para_colunas(a: Atendimento) -> dict[str, Any]:
+    return {
+        "atendimento_estado": a.estado.value,
+        "na_fila_desde": a.na_fila_desde,
+        "atendimento": {
+            "desde": a.desde.isoformat() if a.desde else None,
+            "motivo": a.motivo.value if a.motivo else None,
+            "responsavel": a.responsavel,
+            "respostas_ambiguas": a.respostas_ambiguas,
+        },
+    }
+
+
 def _lead(m: LeadModel) -> Lead:
     return Lead(
         id=m.id,
@@ -108,6 +137,7 @@ def _lead(m: LeadModel) -> Lead:
         qualificacao=_qualificacao(m),
         nome=m.nome,
         agenda=negociacao_de_json(m.agenda),
+        atendimento=_atendimento(m),
     )
 
 
@@ -194,6 +224,32 @@ class LeadRepositorySql:
         async with self._sessoes() as sessao:
             linhas = (await sessao.execute(stmt)).all()
         return [ResumoLead(_lead(m), total, ultima_em) for m, total, ultima_em in linhas]
+
+    async def salvar_atendimento(
+        self, atendimento: Atendimento, esperado: EstadoAtendimento
+    ) -> bool:
+        async with self._sessoes.begin() as sessao:
+            resultado = await sessao.execute(
+                update(LeadModel)
+                .where(
+                    LeadModel.id == atendimento.lead_id,
+                    LeadModel.atendimento_estado == esperado.value,
+                )
+                .values(**_atendimento_para_colunas(atendimento), atualizado_em=func.now())
+            )
+        return bool(resultado.rowcount)  # type: ignore[attr-defined]
+
+    async def listar_por_atendimento(
+        self, estados: Sequence[EstadoAtendimento], limite: int = 100
+    ) -> list[Lead]:
+        async with self._sessoes() as sessao:
+            modelos = await sessao.scalars(
+                select(LeadModel)
+                .where(LeadModel.atendimento_estado.in_([e.value for e in estados]))
+                .order_by(LeadModel.na_fila_desde.asc().nulls_last(), LeadModel.atualizado_em)
+                .limit(limite)
+            )
+            return [_lead(m) for m in modelos]
 
 
 class ConversaRepositorySql:

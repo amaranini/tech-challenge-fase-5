@@ -39,12 +39,19 @@ class LeadModel(Base):
     qualificado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Negociação de horário em curso (opções oferecidas, proposta aguardando confirmação).
     agenda: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
+    # Atendimento (IA × humano): estado em coluna (fila/dashboard) + detalhes em JSONB.
+    atendimento_estado: Mapped[str] = mapped_column(String(30), server_default="atendimento_ia")
+    na_fila_desde: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    atendimento: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     atualizado_em: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    __table_args__ = (UniqueConstraint("canal", "remetente_id", name="uq_leads_canal_remetente"),)
+    __table_args__ = (
+        UniqueConstraint("canal", "remetente_id", name="uq_leads_canal_remetente"),
+        Index("ix_leads_atendimento_fila", "atendimento_estado", "na_fila_desde"),
+    )
 
 
 class ConversaModel(Base):

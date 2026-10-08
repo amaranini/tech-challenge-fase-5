@@ -214,3 +214,38 @@ def test_dias_da_semana_com_ou_sem_acento() -> None:
             {"acao": "preferencia", "preferencia": {"dias_semana": [grafia, "sabado"]}}, AULA
         )
         assert lida.preferencia.dias_semana == (1, 5)
+
+
+async def test_pedido_de_agendar_abre_a_agenda_mesmo_sem_qualificar() -> None:
+    c = Cenario([interpretacao("confirmar")])
+    c.roteador = LLMRoteirizado(
+        estruturadas=[{"intencao": "plano", "confianca": 0.9, "quer_agendar": True}]
+    )
+    c.grafo = AgenteQualificador(
+        LLMsPorNo(c.roteador, c.extracao, c.agente),
+        PERSONA,
+        ConfigQualificacao(INTENCOES, RegrasFake(), "PROMPT_DESCOBERTA"),
+        ferramentas=[],
+        fuso=FUSO_SP,
+        agenda=c.conduzir,
+        relogio=RelogioFake(AGORA),
+    )
+
+    resposta = await c.grafo.responder(EntradaAgente(lead({"unidade": "Centro"}), [], "sim"))
+
+    assert resposta.metadados["no_resposta"] == "responder_agenda"
+    assert resposta.metadados["agenda"]["decisao"] == "oferecer"  # type: ignore[index]
+    assert resposta.agenda is not None
+    assert len(resposta.agenda.ofertados) == 3
+
+
+async def test_limites_do_assistente_em_toda_resposta_com_o_proximo_passo_real() -> None:
+    c = Cenario([interpretacao("nenhuma")])
+    await c.grafo.responder(EntradaAgente(lead(FICHA_COMPLETA), [], "tem fotos?"))
+
+    limites = next(
+        m.conteudo for m in c.agente.chamadas[0][0] if m.conteudo.startswith("# O que você")
+    )
+    assert "NÃO consegue: enviar fotos" in limites
+    assert "nunca diga que tem" in limites
+    assert "próximo passo que existe de verdade: marcar aula experimental" in limites

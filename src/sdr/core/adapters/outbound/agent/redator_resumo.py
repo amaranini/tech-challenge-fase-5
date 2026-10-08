@@ -99,9 +99,8 @@ def _dados(fatos: FatosResumo, fuso: ZoneInfo) -> str:
 
 
 def _transcricao(fatos: FatosResumo) -> str:
-    linhas = [
-        f"{'Lead' if m.papel is Papel.LEAD else 'Assistente'}: {m.texto}" for m in fatos.mensagens
-    ]
+    autores = {Papel.LEAD: "Lead", Papel.ASSISTENTE: "Assistente", Papel.RESPONSAVEL: "Equipe"}
+    linhas = [f"{autores[m.papel]}: {m.texto}" for m in fatos.mensagens]
     return "Conversa completa:\n" + "\n".join(linhas)
 
 

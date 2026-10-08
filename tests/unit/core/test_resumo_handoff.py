@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from sdr.core.application.use_cases.gerar_resumo_handoff import GerarResumoHandoff
 from sdr.core.domain.agenda import Agendamento, Responsavel, StatusAgendamento
+from sdr.core.domain.atendimento import Atendimento, EstadoAtendimento
 from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem, Papel
 from sdr.core.domain.eventos import EventoLead, TipoEvento
 from sdr.core.domain.qualificacao import Classificacao, Qualificacao, Score
@@ -58,7 +59,7 @@ def conversa(conversa_id=None):  # type: ignore[no-untyped-def]
     citados = {"itens_citados": [{"id": "P-1", "titulo": "Plano anual", "resumo": "12x"}]}
     return [
         Mensagem.nova(cid, Papel.LEAD, "Quero treinar na unidade Centro, à noite"),
-        Mensagem.nova(cid, Papel.AGENTE, "Tenho o P-1, plano anual.", metadados=citados),
+        Mensagem.nova(cid, Papel.ASSISTENTE, "Tenho o P-1, plano anual.", metadados=citados),
         Mensagem.nova(cid, Papel.LEAD, "Achei o plano anual caro, tem algo mensal?"),
         Mensagem.nova(cid, Papel.LEAD, "Tenho medo de não conseguir ir todo dia"),
     ]
@@ -363,3 +364,27 @@ async def test_caso_de_uso_poda_frase_sem_sustentacao_antes_de_salvar_e_enviar_a
     resumo = c.crm.registros[c.lead.id][1]
     assert resumo.secao("perfil").conteudo == "Levar o P-1."  # type: ignore[union-attr]
     assert any("preferiu" in d for d in resumo.descartados)
+
+
+async def test_handoff_confirmado_gera_resumo_com_as_mensagens_da_fila() -> None:
+    c = Cenario({})
+    fila_desde = c.conversas.mensagens[-1].criada_em + timedelta(seconds=1)
+    c.leads.leads[c.lead.id] = replace(
+        c.lead,
+        atendimento=Atendimento(
+            c.lead.id, EstadoAtendimento.AGUARDANDO_HUMANO, na_fila_desde=fila_desde
+        ),
+    )
+    na_fila = Mensagem.nova(
+        c.conversa.id, Papel.LEAD, "oi? alguém aí?", criada_em=fila_desde + timedelta(minutes=2)
+    )
+    c.conversas.mensagens.append(na_fila)
+
+    await c.gerar.ao_publicar([c.evento(TipoEvento.HANDOFF_CONFIRMADO)])
+
+    resumo = await c.resumos.ultimo(c.lead.id)
+    assert resumo is not None
+    assert resumo.gatilho == "HandoffConfirmado"
+    anexo = resumo.secao("mensagens_na_espera")
+    assert anexo is not None
+    assert anexo.conteudo == ["oi? alguém aí?"]  # só o que veio depois de entrar na fila

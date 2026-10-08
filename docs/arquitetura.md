@@ -15,7 +15,11 @@ Este documento descreve como o sistema é organizado. Ele se apoia em três deci
 - **agendamento (AgendaPort, mock em Postgres, nó de agenda no grafo):**
   [ADR 007](adr/007-agendamento-agenda-mock.md);
 - **resumo para o responsável fora do turno, ancorado, e CRMPort:**
-  [ADR 008](adr/008-resumo-handoff-crm.md).
+  [ADR 008](adr/008-resumo-handoff-crm.md);
+- **atendimento humano (máquina de estados, gate no grafo, compare-and-set):**
+  [ADR 009](adr/009-atendimento-humano-handoff.md);
+- **limites do assistente (honestidade + próximo passo real):**
+  [ADR 010](adr/010-limites-do-assistente.md).
 
 ## 1. Contexto
 
@@ -235,7 +239,16 @@ de um lead, venha do chat web ou do WhatsApp, vira um `MensagemRecebida` e entra
 
 ```mermaid
 flowchart TD
-    START([mensagem + estado do lead]) --> R["roteador<br/>LLM_MODEL_ROUTER · saída estruturada"]
+    START([mensagem + estado do lead]) --> GATE{"gate<br/>estado de atendimento"}
+    GATE -- ATENDIMENTO_HUMANO --> SIL([silêncio · sem LLM])
+    GATE -- AGUARDANDO_HUMANO --> ESP["espera<br/>quer voltar para a assistente?"]
+    GATE -- "CONFIRMANDO_*" --> CONF["confirmação<br/>sim · não · ambígua"]
+    GATE -- ATENDIMENTO_IA --> R["roteador<br/>LLM_MODEL_ROUTER · saída estruturada<br/>+ atendimento_humano"]
+    R -- "precisa de humano" --> SH["solicitar_handoff"]
+    ESP --> RAT["responder_atendimento<br/>bloco: fila, horário, retorno"]
+    CONF --> RAT
+    SH --> RAT
+    RAT --> FIM
     R --> D{"Qualificacao.aplicar_intencao<br/>(domínio do core)"}
     D -- "sem intenção" --> DESC["descoberta<br/>prompt de descoberta da vertical"]
     D -- "intenção X (nova, mantida ou trocada)" --> EX["extração<br/>LLM_MODEL_EXTRACTION · schema da intenção X"]
@@ -298,6 +311,25 @@ sequenceDiagram
     G->>CRM: cria/atualiza lead + anexa resumo
     G->>G: evento ResumoHandoffGerado
 ```
+
+### Atendimento IA × humano ([ADR 009](adr/009-atendimento-humano-handoff.md))
+
+```mermaid
+stateDiagram-v2
+    [*] --> ATENDIMENTO_IA
+    ATENDIMENTO_IA --> CONFIRMANDO_HANDOFF: pede humano / frustração / fora do escopo / negociação<br/>(HandoffSolicitado)
+    CONFIRMANDO_HANDOFF --> AGUARDANDO_HUMANO: sim (HandoffConfirmado)
+    CONFIRMANDO_HANDOFF --> ATENDIMENTO_IA: não / ambígua 2x (HandoffRecusado)
+    AGUARDANDO_HUMANO --> ATENDIMENTO_HUMANO: equipe assume (AtendimentoHumanoIniciado)
+    AGUARDANDO_HUMANO --> CONFIRMANDO_RETORNO_IA: quer voltar (RetornoIASolicitado)
+    CONFIRMANDO_RETORNO_IA --> ATENDIMENTO_IA: sim, sai da fila (RetornoIAConfirmado)
+    CONFIRMANDO_RETORNO_IA --> AGUARDANDO_HUMANO: não / ambígua 2x
+    ATENDIMENTO_HUMANO --> ATENDIMENTO_IA: equipe devolve (AtendimentoHumanoEncerrado)
+```
+
+O grafo só decide a ação e prevê o estado. O `ProcessarTurno` recheca o estado antes de
+enviar (se um humano assumiu no meio, a resposta é descartada) e aplica a ação com
+compare-and-set.
 
 ## 7. Mensagens do lead → turno → resposta da Lia (assíncrono, [ADR 006](adr/006-processamento-assincrono-debounce.md))
 

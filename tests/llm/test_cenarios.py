@@ -13,7 +13,16 @@ from typing import Any
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from tests.apoio.api_viva import aguardar_resumo, enviar, exigir_api, historico, obter_lead
+from tests.apoio.api_viva import (
+    acao_da_equipe,
+    aguardar_resposta,
+    aguardar_resumo,
+    enviar,
+    exigir_api,
+    historico,
+    obter_lead,
+    postar,
+)
 from tests.apoio.banco_vivo import registro_crm
 from tests.apoio.cenarios import Cenario, carregar_cenarios, divergencias, divergencias_resumo
 
@@ -46,6 +55,8 @@ def _resumo(estado: dict[str, Any]) -> str:
 
 def _conferir_painel(lead_id: str, estado: dict[str, Any]) -> None:
     """O painel ao lado do chat mostra intenção, score, ficha e próxima ação do lead."""
+    if estado.get("agendamento"):
+        aguardar_resumo(lead_id, None)  # gerado fora do turno: o painel só mostra depois
     app = AppTest.from_file(str(APP_WEB), default_timeout=30)
     app.session_state["lead_id"] = lead_id
     app.run()
@@ -69,7 +80,29 @@ def test_cenario(cenario: Cenario) -> None:
     print(f"\n=== {cenario.nome} ({lead_id}) — {cenario.descricao}")
 
     for numero, fala in enumerate(cenario.falas, start=1):
-        enviar(lead_id, fala.texto)
+        if fala.acao is not None:
+            acao_da_equipe(lead_id, fala.acao)
+            continue
+        esperado = fala.esperado or {}
+        if esperado.get("sem_resposta"):
+            postar(lead_id, fala.texto)
+            ultima = aguardar_resposta(lead_id)["mensagens"][-1]
+            assert ultima["papel"] == "lead", f"fala {numero}: a IA respondeu {ultima['texto']!r}"
+            print("[lia]  (em silêncio: atendimento humano)")
+        else:
+            resposta = enviar(lead_id, fala.texto)["resposta"]["texto"]
+            faltando = [
+                trecho
+                for trecho in esperado.get("resposta_contem", [])
+                if trecho.casefold() not in resposta.casefold()
+            ]
+            assert not faltando, f"fala {numero}: resposta sem {faltando}: {resposta!r}"
+            proibidos = [
+                trecho
+                for trecho in esperado.get("resposta_nao_contem", [])
+                if trecho.casefold() in resposta.casefold()
+            ]
+            assert not proibidos, f"fala {numero}: resposta com {proibidos}: {resposta!r}"
         if fala.esperado:
             erros = divergencias(obter_lead(lead_id), fala.esperado)
             assert not erros, f"{cenario.arquivo.name}, fala {numero} ({fala.texto!r}):\n- " + (

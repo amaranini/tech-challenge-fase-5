@@ -44,6 +44,13 @@ from sdr.core.adapters.outbound.persistence.verificador_saude_postgres import (
 from sdr.core.adapters.outbound.relogio import RelogioSistema
 from sdr.core.adapters.outbound.turnos.agendador_debounce import AgendadorDebounce
 from sdr.core.application.ports.llm import LLMPort
+from sdr.core.application.use_cases.atendimento import (
+    AplicarAcaoAtendimento,
+    AssumirAtendimento,
+    DevolverAtendimento,
+    EnviarMensagemResponsavel,
+    ListarAtendimentos,
+)
 from sdr.core.application.use_cases.conduzir_agendamento import ConduzirAgendamento
 from sdr.core.application.use_cases.consultar_agenda_e_resumo import (
     ListarAgendamentos,
@@ -59,6 +66,7 @@ from sdr.core.application.use_cases.obter_lead import ObterLead
 from sdr.core.application.use_cases.processar_turno import ProcessarTurno
 from sdr.core.application.use_cases.receber_mensagem import ReceberMensagem
 from sdr.core.application.use_cases.verificar_saude import VerificarSaude
+from sdr.core.domain.atendimento import HorarioAtendimento
 from sdr.core.domain.conversa import Canal
 from sdr.core.vertical import InfraCompartilhada, VerticalMontada, VerticalPack
 from sdr.verticals.imobiliario.pack import PackImobiliario
@@ -103,6 +111,10 @@ class Container:
     listar_agendamentos: ListarAgendamentos
     publicador: PublicadorEventosAsyncio
     gerar_resumo: GerarResumoHandoff | None
+    listar_atendimentos: ListarAtendimentos
+    assumir_atendimento: AssumirAtendimento
+    devolver_atendimento: DevolverAtendimento
+    enviar_mensagem_responsavel: EnviarMensagemResponsavel
     agenda: AgendaPostgres
     relogio: RelogioSistema
     settings: Settings
@@ -156,6 +168,9 @@ def montar_container(settings: Settings | None = None) -> Container:
     relogio = RelogioSistema()
     fuso = ZoneInfo(settings.fuso_operacao)
     agenda = AgendaPostgres(sessoes)
+    horario = HorarioAtendimento.de_texto(
+        settings.atendimento_dias, settings.atendimento_faixas, settings.fuso_operacao
+    )
     conduzir_agendamento = None
     if vertical.tipos_agendamento and vertical.regra_atribuicao is not None:
         conduzir_agendamento = ConduzirAgendamento(
@@ -188,6 +203,7 @@ def montar_container(settings: Settings | None = None) -> Container:
         fuso=fuso,
         agenda=conduzir_agendamento,
         relogio=relogio,
+        horario=horario,
     )
 
     # Reações fora do turno: resumo para o responsável + CRM (se a vertical tem template).
@@ -213,6 +229,7 @@ def montar_container(settings: Settings | None = None) -> Container:
         )
         publicador.assinar(gerar_resumo.ao_publicar)
 
+    canais = {Canal.WEB: CanalWeb()}
     agendador = AgendadorDebounce(settings.debounce_segundos, settings.debounce_max_segundos)
     processar_turno = ProcessarTurno(
         leads,
@@ -223,9 +240,10 @@ def montar_container(settings: Settings | None = None) -> Container:
         persona=vertical.persona,
         trava=TravaTurnoPostgres(engine),
         agendador=agendador,
-        canais={Canal.WEB: CanalWeb()},
+        canais=canais,
         janela_historico=settings.conversa_janela_historico,
         publicador=publicador,
+        atendimento=AplicarAcaoAtendimento.com(leads, eventos, relogio, publicador),
     )
     agendador.definir_executor(processar_turno.executar)
 
@@ -246,6 +264,10 @@ def montar_container(settings: Settings | None = None) -> Container:
         listar_agendamentos=ListarAgendamentos(agenda, leads),
         publicador=publicador,
         gerar_resumo=gerar_resumo,
+        listar_atendimentos=ListarAtendimentos(leads, relogio),
+        assumir_atendimento=AssumirAtendimento(leads, eventos, relogio, publicador),
+        devolver_atendimento=DevolverAtendimento(leads, eventos, relogio, publicador),
+        enviar_mensagem_responsavel=EnviarMensagemResponsavel(leads, conversas, canais, relogio),
         agenda=agenda,
         relogio=relogio,
         settings=settings,
@@ -277,6 +299,10 @@ def criar_aplicacao(settings: Settings | None = None) -> FastAPI:
             obter_lead=lambda: container.obter_lead,
             obter_resumo=lambda: container.obter_resumo,
             listar_agendamentos=lambda: container.listar_agendamentos,
+            listar_atendimentos=lambda: container.listar_atendimentos,
+            assumir_atendimento=lambda: container.assumir_atendimento,
+            devolver_atendimento=lambda: container.devolver_atendimento,
+            enviar_mensagem_responsavel=lambda: container.enviar_mensagem_responsavel,
         ),
         routers=container.vertical.routers,
         ao_iniciar=[

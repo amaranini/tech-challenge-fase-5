@@ -24,7 +24,7 @@ def fatos() -> FatosResumo:
         agendamento=None,
         mensagens=(
             Mensagem.nova(cid, Papel.LEAD, "quero treinar"),
-            Mensagem.nova(cid, Papel.AGENTE, "tenho o P-1"),
+            Mensagem.nova(cid, Papel.ASSISTENTE, "tenho o P-1"),
         ),
         itens={"P-1": ItemCitado("P-1", "Plano anual")},
     )

@@ -96,7 +96,7 @@ def test_confere_dia_da_semana_e_periodo_de_horario_iso() -> None:
 def test_divergencias_resumo_pega_imovel_trecho_e_evidencia_inventados() -> None:
     mensagens = [
         {"papel": "lead", "texto": "Quero 2 quartos na zona sul", "itens_citados": []},
-        {"papel": "agente", "texto": "Veja o IMV-001", "itens_citados": [{"id": "IMV-001"}]},
+        {"papel": "assistente", "texto": "Veja o IMV-001", "itens_citados": [{"id": "IMV-001"}]},
     ]
     resumo = {
         "secoes": [

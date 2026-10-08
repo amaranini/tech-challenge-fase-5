@@ -7,6 +7,7 @@ from enum import StrEnum
 from uuid import UUID, uuid4
 
 from sdr.core.domain.agenda import NegociacaoAgenda
+from sdr.core.domain.atendimento import Atendimento
 from sdr.core.domain.qualificacao import Qualificacao
 
 
@@ -20,15 +21,18 @@ class Canal(StrEnum):
 
 
 class Papel(StrEnum):
+    """Autor da mensagem."""
+
     LEAD = "lead"
-    AGENTE = "agente"
+    ASSISTENTE = "assistente"  # a IA
+    RESPONSAVEL = "responsavel"  # pessoa da equipe (atendimento humano)
 
 
 class StatusMensagem(StrEnum):
     PENDENTE = "pendente"  # do lead, aguardando o turno ser processado
     PROCESSADA = "processada"  # do lead, já respondida
     FALHA = "falha"  # do lead, o turno falhou (fica no histórico, sem resposta)
-    ENVIADA = "enviada"  # do agente, entregue ao canal
+    ENVIADA = "enviada"  # do assistente ou do responsável, entregue ao canal
 
 
 class StatusConversa(StrEnum):
@@ -51,6 +55,11 @@ class Lead:
     qualificacao: Qualificacao
     nome: str | None = None
     agenda: NegociacaoAgenda = field(default_factory=NegociacaoAgenda)
+    atendimento: Atendimento | None = None  # None = ATENDIMENTO_IA desde sempre
+
+    @property
+    def atendimento_atual(self) -> Atendimento:
+        return self.atendimento or Atendimento(self.id)
 
     @classmethod
     def novo(cls, canal: Canal, remetente_id: str, nome: str | None = None) -> "Lead":
@@ -64,6 +73,7 @@ class Lead:
             criado_em=agora(),
             qualificacao=Qualificacao(lead_id),
             nome=nome,
+            atendimento=Atendimento(lead_id),
         )
 
 

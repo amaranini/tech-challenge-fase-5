@@ -85,6 +85,7 @@ class FatosResumo:
     agendamento: Agendamento | None
     mensagens: tuple[Mensagem, ...]  # conversa em ordem cronológica
     itens: Mapping[str, ItemCitado]  # itens do catálogo citados na conversa (por id)
+    mensagens_espera: tuple[str, ...] = ()  # falas do lead enquanto aguardava um humano
 
     def impressao_digital(self) -> str:
         ag = self.agendamento
@@ -256,6 +257,24 @@ def ancorar(
                 conteudo = _dados(secao, fatos)
         secoes.append(SecaoPreenchida(secao.chave, secao.titulo, secao.tipo, conteudo))
     return tuple(secoes), tuple(descartados)
+
+
+CHAVE_MENSAGENS_ESPERA = "mensagens_na_espera"
+
+
+def anexar_mensagens_espera(
+    secoes: tuple[SecaoPreenchida, ...], fatos: FatosResumo
+) -> tuple[SecaoPreenchida, ...]:
+    """Falas do lead enquanto aguardava na fila vão literais para quem vai atendê-lo."""
+    if not fatos.mensagens_espera:
+        return secoes
+    anexo = SecaoPreenchida(
+        CHAVE_MENSAGENS_ESPERA,
+        "Mensagens do lead enquanto aguardava atendimento",
+        TipoSecao.TRECHOS,
+        list(fatos.mensagens_espera),
+    )
+    return (*secoes, anexo)
 
 
 def itens_citados(mensagens: Sequence[Mensagem]) -> dict[str, ItemCitado]:

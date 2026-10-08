@@ -17,6 +17,7 @@ from sdr.core.adapters.inbound.http.dependencias import (
     obter_obter_resumo,
 )
 from sdr.core.adapters.inbound.http.routers.agendamentos import AgendamentoResposta
+from sdr.core.adapters.inbound.http.routers.atendimentos import AtendimentoResposta
 from sdr.core.application.use_cases.consultar_agenda_e_resumo import ObterResumo
 from sdr.core.application.use_cases.consultar_conversas import ListarLeads
 from sdr.core.application.use_cases.obter_lead import EstadoLead, ObterLead
@@ -72,6 +73,7 @@ class LeadDetalhe(BaseModel):
     agendamento: AgendamentoResposta | None = Field(
         default=None, description="Agendamento ativo e ainda por acontecer"
     )
+    atendimento: AtendimentoResposta = Field(description="IA × humano (fila, quem atende)")
 
     @classmethod
     def de_estado(cls, estado: EstadoLead) -> "LeadDetalhe":
@@ -96,6 +98,7 @@ class LeadDetalhe(BaseModel):
                 if estado.agendamento
                 else None
             ),
+            atendimento=AtendimentoResposta.de_dominio(lead.atendimento_atual),
         )
 
 

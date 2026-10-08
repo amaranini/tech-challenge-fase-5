@@ -50,7 +50,7 @@ def enviar(lead_id: str, texto: str) -> dict[str, Any]:
     postar(lead_id, texto)
     historico = aguardar_resposta(lead_id)
     resposta = historico["mensagens"][-1]
-    assert resposta["papel"] == "agente"
+    assert resposta["papel"] == "assistente"
     print(f"[lia]  {resposta['texto']}")
     return {"conversa_id": historico["conversa_id"], "resposta": resposta}
 
@@ -80,3 +80,21 @@ def aguardar_resumo(lead_id: str, gatilho: str | None, timeout: float = 120) -> 
                 return corpo
         time.sleep(2)
     raise AssertionError(f"sem resumo ({gatilho}) para {lead_id} em {timeout}s")
+
+
+def acao_da_equipe(lead_id: str, acao: dict[str, Any]) -> None:
+    """Passo da tela Fila: assumir, responder ou devolver o atendimento."""
+    with httpx.Client(base_url=API_URL, timeout=30) as api:
+        match acao["acao"]:
+            case "assumir":
+                r = api.post(
+                    f"/atendimentos/{lead_id}/assumir", json={"responsavel": acao["responsavel"]}
+                )
+            case "responder":
+                r = api.post(f"/atendimentos/{lead_id}/mensagens", json={"texto": acao["texto"]})
+            case "devolver":
+                r = api.post(f"/atendimentos/{lead_id}/devolver")
+            case outra:
+                raise ValueError(f"ação desconhecida: {outra}")
+    assert r.is_success, r.text
+    print(f"\n[equipe] {acao['acao']} {acao.get('texto', acao.get('responsavel', ''))}")

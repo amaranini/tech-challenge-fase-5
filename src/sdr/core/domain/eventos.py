@@ -20,6 +20,14 @@ class TipoEvento(StrEnum):
     AGENDAMENTO_REMARCADO = "AgendamentoRemarcado"
     AGENDAMENTO_CANCELADO = "AgendamentoCancelado"
     RESUMO_GERADO = "ResumoHandoffGerado"
+    HANDOFF_SOLICITADO = "HandoffSolicitado"
+    HANDOFF_CONFIRMADO = "HandoffConfirmado"
+    HANDOFF_RECUSADO = "HandoffRecusado"
+    ATENDIMENTO_HUMANO_INICIADO = "AtendimentoHumanoIniciado"
+    ATENDIMENTO_HUMANO_ENCERRADO = "AtendimentoHumanoEncerrado"
+    RETORNO_IA_SOLICITADO = "RetornoIASolicitado"
+    RETORNO_IA_CONFIRMADO = "RetornoIAConfirmado"
+    MENSAGEM_NA_ESPERA = "MensagemDuranteEspera"
 
 
 @dataclass(frozen=True)

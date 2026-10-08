@@ -6,8 +6,15 @@ Formato de um roteiro:
       "falas": ["fala 1 do lead", "fala 2", ...],      # cada uma espera a resposta da Lia
       # uma fala também pode conferir o estado logo depois dela:
       #   {"texto": "pode ser quinta?", "esperado": {"eventos_ausentes": ["AgendamentoCriado"]}}
+      # ... e a resposta: {"sem_resposta": true} (IA em silêncio) ou
+      #   {"resposta_contem": ["850"]} (todas as substrings, sem caixa) e/ou
+      #   {"resposta_nao_contem": ["tenho sim"]} (nenhuma delas)
+      # passos da equipe (tela Fila), via API:
+      #   {"acao": "assumir", "responsavel": "Rafael"} | {"acao": "responder", "texto": "..."}
+      #   | {"acao": "devolver"}
       "esperado": {
         "intencao": "compra",                           # igualdade
+        "atendimento_estado": "aguardando_humano",      # estado de atendimento (IA × humano)
         "proxima_acao": "agendar_visita",
         "classificacao": {"um_de": ["quente"]},
         "score_min": 70,
@@ -50,6 +57,7 @@ PASTA_CENARIOS = RAIZ / "evals" / "cenarios"
 class Fala:
     texto: str
     esperado: dict[str, Any] | None = None  # conferido logo após a resposta a esta fala
+    acao: dict[str, Any] | None = None  # passo da equipe (assumir/responder/devolver)
 
 
 @dataclass(frozen=True)
@@ -64,6 +72,8 @@ class Cenario:
 def _fala(bruta: str | dict[str, Any]) -> Fala:
     if isinstance(bruta, str):
         return Fala(bruta)
+    if "acao" in bruta:
+        return Fala("", acao=dict(bruta))
     return Fala(bruta["texto"], bruta.get("esperado"))
 
 
@@ -149,6 +159,12 @@ def divergencias(estado: dict[str, Any], esperado: dict[str, Any]) -> list[str]:
     for chave in ("intencao", "proxima_acao", "classificacao"):
         if chave in esperado and not confere(estado.get(chave), esperado[chave]):
             erros.append(f"{chave}: esperado {esperado[chave]!r}, obtido {estado.get(chave)!r}")
+    if "atendimento_estado" in esperado:
+        obtido = estado.get("atendimento", {}).get("estado")
+        if not confere(obtido, esperado["atendimento_estado"]):
+            erros.append(
+                f"atendimento: esperado {esperado['atendimento_estado']!r}, obtido {obtido!r}"
+            )
     if "score_min" in esperado and (estado.get("score") or 0) < esperado["score_min"]:
         erros.append(f"score: esperado >= {esperado['score_min']}, obtido {estado.get('score')}")
     erros += _conferir_ficha("ficha", estado.get("ficha", {}), esperado.get("ficha", {}))

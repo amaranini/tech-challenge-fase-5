@@ -1,6 +1,6 @@
 # CLAUDE.md — Agente SDR Conversacional (vertical ativa: imobiliário)
 
-## Fase atual: Dia 3 — Etapa B (Resumo + CRM) — entregue, aguardando aceite da PO
+## Fase atual: Dia 3 — Etapa C (Atendimento humano) — entregue, aguardando aceite da PO
 
 Ao fim de CADA etapa: parar, listar como verificar o critério de aceite e esperar o ok da PO.
 Commits só com ok da PO, um por etapa, na branch `dia-3` (nunca direto na `main`); ao fim
@@ -67,7 +67,9 @@ src/sdr/
                            RegraAtribuicao, PreferenciaHorario, NegociacaoAgenda e `decidir`
                            — negociação pura, confirmação explícita antes de executar),
                            resumo.py (TemplateResumo, FatosResumo, Resumo versionado e a
-                           ancoragem: dados do estado, itens citados, evidência literal)
+                           ancoragem: dados do estado, itens citados, evidência literal),
+                           atendimento.py (máquina de estados IA × humano com tabela de
+                           transições, AcaoAtendimento do turno, HorarioAtendimento)
     application/
       ports/               Protocols: CatalogoPort, EmbeddingPort, VerificadorSaudePort, LLMPort
                            (texto + saída estruturada), AgenteConversacionalPort, Ferramenta,
@@ -85,7 +87,10 @@ src/sdr/
                            VerificarSaude, ConduzirAgendamento (slots livres dos aptos →
                            decidir → reservar/remarcar/cancelar só após o "sim"),
                            GerarResumoHandoff (assinante dos eventos, FORA do turno),
-                           ObterResumo, ListarAgendamentos
+                           ObterResumo, ListarAgendamentos, atendimento.py (SolicitarHandoff,
+                           ConfirmarHandoff, SolicitarRetornoIA, ConfirmarRetornoIA,
+                           AssumirAtendimento, DevolverAtendimento, EnviarMensagemResponsavel,
+                           ListarAtendimentos; compare-and-set no estado)
       dto/                 MensagemRecebida normalizada e agnóstica de canal
                            (canal, remetente_id, texto, timestamp, metadados)
     adapters/              infraestrutura GENÉRICA, reaproveitada por qualquer vertical
@@ -107,11 +112,15 @@ src/sdr/
       outbound/embeddings/   fastembed (ONNX) local multilíngue (ADR 002)
       outbound/llm/          LLMOpenAI (Chat Completions + tool calling); provedor via
                              LLM_PROVIDER, modelo via LLM_MODELO (ADR 004)
-      outbound/agent/        AgenteQualificador (LangGraph): roteador → extração → scoring →
+      outbound/agent/        AgenteQualificador (LangGraph): gate de atendimento → (silêncio |
+                             espera | confirmação → responder_atendimento) | roteador
+                             (+ atendimento_humano) → extração → scoring →
                              especialista ⇄ ferramentas | descoberta (ADR 005) | agenda →
                              responder_agenda (ADR 007); LLM por nó; prompts genéricos em
-                             agent/prompts/ (roteador_v1, extracao_v2, agenda_interpretacao_v1,
-                             agendamento_v1, resumo_v1); agenda.py (interpretação + bloco com
+                             agent/prompts/ (roteador_v2, extracao_v2, agenda_interpretacao_v1,
+                             agendamento_v1, resumo_v1, resumo_checagem_v1, atendimento_v1,
+                             atendimento_classificacao_v1); atendimento.py (bloco de fila/horário);
+                             agenda.py (interpretação + bloco com
                              horários reais); redator_resumo.py (RedatorResumoPort com LLM);
                              memória vem do banco, não do LangGraph
     vertical.py            contrato VerticalPack + InfraCompartilhada + VerticalMontada
@@ -133,8 +142,8 @@ src/sdr/
         adapters/          ORM/repositório SQL, índice pgvector, interpretador por regras,
                            esquema de filtros (Pydantic), CatalogoImobiliario (→ CatalogoPort),
                            definição da tool buscar_imoveis, rotas /imoveis, carga do JSON
-      persona/             Lia: lia.py + prompts/<versao>.md (IMOBILIARIO_VERSAO_PROMPT),
-                           prompts/descoberta_v1.md, prompts/especialistas/<intencao>_v1.md
+      persona/             Lia: lia.py + prompts/<versao>.md (IMOBILIARIO_VERSAO_PROMPT=lia_v2),
+                           prompts/descoberta_v2.md, prompts/especialistas/<intencao>_v1.md
       qualificacao/        domain/regras.py (CAMPOS/ESSENCIAIS por intenção, scoring com
                            score_motivos, critério de qualificado — puro); adapters/fichas.py
                            (Pydantic por intenção), schema_pydantic.py (SchemaFicha sobre
@@ -145,8 +154,9 @@ src/sdr/
                            pelo registro VERTICAIS e chama pack.montar(infra)
   main.py                  entrypoint ASGI (uvicorn sdr.main:app)
   cli.py                   python -m sdr.cli seed — carga inicial do catálogo da vertical
-web/                       Streamlit: chat + painel de qualificação ao lado (dois
-                           st.fragment com polling) + seletor de lead_id — SOMENTE via API HTTP
+web/                       Streamlit: chat + painel (qualificação, atendimento, agendamento,
+                           resumo) + tela "Fila" da equipe (assumir, responder, devolver) —
+                           SOMENTE via API HTTP
 worker/                    (Dia 3) processo separado para follow-up
 migrations/                Alembic — histórico ÚNICO para core + verticais
 tests/apoio/               fakes dos ports e fábricas (core e por vertical); api_viva.py
@@ -201,6 +211,20 @@ docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
   - Nada fora da base: códigos citados são conferidos no catálogo; código inexistente ⇒ uma
     correção; persistindo ⇒ fallback da persona.
   - Prompts versionados em arquivo; toda resposta grava prompt_versao, modelo e tokens.
+- **Atendimento humano (ADR 009)**
+  - Máquina de estados no domínio; transição fora da tabela = erro. Confirmação obrigatória
+    antes de handoff e de voltar para a IA; ambígua ⇒ pergunta UMA vez de novo.
+  - Gate no início do grafo; em ATENDIMENTO_HUMANO a IA fica em silêncio (sem LLM).
+  - O grafo decide a ação; o turno recheca o estado e aplica com compare-and-set
+    (`salvar_atendimento`); `salvar` do lead nunca grava atendimento.
+  - Horário de atendimento é da operação (ATENDIMENTO_DIAS/FAIXAS), não da vertical.
+  - Mensagens têm autor: lead | assistente | responsavel.
+- **Limites do assistente (ADR 010)**
+  - Toda resposta leva `limites_v1` (core): o que a IA consegue e o próximo passo REAL para
+    o resto (marcar com o responsável / transferir). Nunca "tenho, mas…", nunca "peço para
+    alguém mandar". O que a base não tem é declarado na persona da vertical.
+  - Roteador: `quer_agendar` (abre a agenda mesmo antes de qualificar) e `fora_do_alcance`
+    (tira o "próximo dado" do bloco do especialista nesse turno).
 - **Qualificação (ADR 005)**
   - Regras universais (troca de intenção, merge, faltantes, eventos) no agregado
     `Qualificacao` do domínio; nós do grafo só orquestram. Scoring/critério são da vertical.
@@ -260,6 +284,10 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
   turno em LeadQualificado/AgendamentoCriado; 404 enquanto não existe); `GET /agendamentos`
   (`?status=ativo&a_partir_de=...`). CRM mock: tabela `crm_registros` + `var/crm_mock.jsonl`
   (`docker compose exec api tail var/crm_mock.jsonl`). `LLM_MODEL_SUMMARY` para o resumo.
+- Atendimento humano: `GET /atendimentos/fila`, `GET /atendimentos?estado=atendimento_humano`,
+  `POST /atendimentos/{lead_id}/assumir {responsavel}`, `/devolver`, `/mensagens {texto}`;
+  Streamlit → barra lateral "Tela: 🧑‍💼 Fila (equipe)". Horário: `ATENDIMENTO_DIAS=seg-sex`,
+  `ATENDIMENTO_FAIXAS=09:00-18:00` (para ver o "fora do horário", rode fora da faixa ou ajuste).
 - Chat: http://localhost:8501 (Streamlit) ou `POST /conversas/mensagens {lead_id, texto}` (202)
   + polling em `GET /conversas/{lead_id}/mensagens` (`processando` = Lia digitando).
 - Testes de integração usam o banco `sdr_test` (recriado e migrado por sessão); não tocam no seed.
@@ -291,7 +319,7 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
 - **Dia 3** — Agendamento + resumo para o responsável + atendimento humano + follow-up
   - Etapa A — Agendamento (AgendaPort mock, nó de agendamento, eventos) — ADR 007
   - Etapa B — Resumo de handoff (fora do turno, ancorado) + CRMPort mock + painel — ADR 008
-  - Etapa C — Máquina de estados de atendimento (handoff para humano) + tela Fila
+  - Etapa C — Máquina de estados de atendimento (handoff para humano) + tela Fila — ADR 009
   - Etapa D — Worker de follow-up (SKIP LOCKED, cadência da vertical, opt-out, SLA)
 - **Dia 4** — Dashboard + WhatsApp (Twilio Sandbox) + observabilidade Langfuse
 - **Dia 5** — Deploy cloud + guardrails/mascaramento de PII + eval + README e docs finais

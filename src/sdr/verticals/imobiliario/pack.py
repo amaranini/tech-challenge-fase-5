@@ -78,7 +78,7 @@ class PackImobiliario:
                 }
             ),
             regras_qualificacao=RegrasImobiliarias(),
-            prompt_descoberta=carregar_prompt("descoberta_v1"),
+            prompt_descoberta=carregar_prompt("descoberta_v2"),
             ferramentas=[FerramentaBuscarCatalogo(catalogo, DEFINICAO_BUSCAR_IMOVEIS)],
             routers=[criar_router(buscar_imoveis, repositorio)],
             regra_atribuicao=RegraAtribuicaoImobiliaria(zona_por_bairro),

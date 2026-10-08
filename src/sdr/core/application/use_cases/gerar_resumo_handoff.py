@@ -28,7 +28,7 @@ from sdr.core.application.ports.repositorios import (
 )
 from sdr.core.application.ports.resumo import RedatorResumoPort, ResumoRepository
 from sdr.core.domain.agenda import Agendamento
-from sdr.core.domain.conversa import Lead
+from sdr.core.domain.conversa import Lead, Papel
 from sdr.core.domain.eventos import EventoLead, TipoEvento
 from sdr.core.domain.qualificacao import IntencaoVertical, campos_faltantes
 from sdr.core.domain.resumo import (
@@ -38,13 +38,16 @@ from sdr.core.domain.resumo import (
     TemplateResumo,
     TipoSecao,
     ancorar,
+    anexar_mensagens_espera,
     itens_citados,
     podar_textos,
 )
 
 logger = logging.getLogger(__name__)
 
-GATILHOS_INICIAIS = frozenset({TipoEvento.LEAD_QUALIFICADO, TipoEvento.AGENDAMENTO_CRIADO})
+GATILHOS_INICIAIS = frozenset(
+    {TipoEvento.LEAD_QUALIFICADO, TipoEvento.AGENDAMENTO_CRIADO, TipoEvento.HANDOFF_CONFIRMADO}
+)
 GATILHOS_ATUALIZACAO = frozenset(
     {
         TipoEvento.INTENCAO_ALTERADA,
@@ -53,6 +56,7 @@ GATILHOS_ATUALIZACAO = frozenset(
         TipoEvento.CAMPO_REMOVIDO,
         TipoEvento.AGENDAMENTO_REMARCADO,
         TipoEvento.AGENDAMENTO_CANCELADO,
+        TipoEvento.MENSAGEM_NA_ESPERA,  # o que o lead disse na fila vai para o resumo
     }
 )
 LIMITE_MENSAGENS = 200
@@ -131,6 +135,7 @@ class GerarResumoHandoff:
             descartados = (*descartados, *podados)
         if descartados:
             logger.warning("Resumo do lead %s: ancoragem descartou %s", lead_id, descartados)
+        secoes = anexar_mensagens_espera(secoes, fatos)
         resumo = Resumo(
             id=uuid4(),
             lead_id=lead_id,
@@ -175,6 +180,14 @@ class GerarResumoHandoff:
         q = lead.qualificacao
         intencao = self._intencoes.get(q.intencao_atual or "")
         faltantes = campos_faltantes(q.ficha, intencao.prioridade_campos) if intencao else []
+        na_fila_desde = lead.atendimento_atual.na_fila_desde
+        espera = (
+            tuple(
+                m.texto for m in mensagens if m.papel is Papel.LEAD and m.criada_em >= na_fila_desde
+            )
+            if na_fila_desde
+            else ()
+        )
         return FatosResumo(
             lead_id=lead.id,
             intencao=q.intencao_atual,
@@ -185,6 +198,7 @@ class GerarResumoHandoff:
             agendamento=await self._agendamento(lead.id),
             mensagens=tuple(mensagens),
             itens=itens_citados(mensagens),
+            mensagens_espera=espera,
         )
 
     async def _agendamento(self, lead_id: UUID) -> Agendamento | None:

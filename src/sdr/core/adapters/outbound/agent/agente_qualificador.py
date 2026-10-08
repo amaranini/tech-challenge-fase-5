@@ -1,10 +1,20 @@
 """AgenteConversacionalPort com LangGraph: roteador → extração → scoring → especialista.
 
-    START → roteador ─┬─ (sem intenção) ──────────────→ descoberta ⇄ ferramentas → END
+    START → gate (estado de atendimento)
+      ├─ ATENDIMENTO_HUMANO ──────────→ silêncio (a IA não responde) → END
+      ├─ AGUARDANDO_HUMANO ───────────→ espera ─────────────────┐
+      ├─ CONFIRMANDO_HANDOFF ─────────→ confirmacao_handoff ────┤→ responder_atendimento → END
+      ├─ CONFIRMANDO_RETORNO_IA ──────→ confirmacao_retorno ────┤
+      └─ ATENDIMENTO_IA → roteador ─┬─ (precisa de humano) → solicitar_handoff ┘
+                                    │
+    roteador ─┬─ (sem intenção) ──────────────→ descoberta ⇄ ferramentas → END
                       └─ (intenção X) → extração → scoring ─┬→ especialista ⇄ ferramentas → END
                                                             └→ agenda → responder_agenda
                                                                         ⇄ ferramentas → END
 
+- atendimento: o grafo só DECIDE a ação (pedir handoff, confirmar, voltar para a IA...) e
+  prevê o novo estado com o domínio para redigir a resposta; quem aplica (com
+  compare-and-set) é o turno, que descarta a resposta se o estado mudou no meio.
 - agenda: lead qualificado numa intenção com `TipoAgendamento` (ou negociação em curso). O
   LLM só INTERPRETA a fala (ação + preferência estruturada) e depois REDIGE a resposta; os
   horários reais, a confirmação e a reserva são do domínio/`ConduzirAgendamento`. Se o lead
@@ -37,6 +47,18 @@ from sdr.core.adapters.outbound.agent.agenda import (
     prompt_interpretacao,
     schema_interpretacao,
 )
+from sdr.core.adapters.outbound.agent.atendimento import (
+    SCHEMA_ESPERA,
+    SCHEMA_RESPOSTA,
+    SEM_HANDOFF,
+    SINAIS_HUMANO,
+    SITUACAO_ESPERA,
+    SITUACAO_HANDOFF,
+    SITUACAO_RETORNO,
+    bloco_atendimento,
+    ler_confirmacao,
+    ler_sinal_humano,
+)
 from sdr.core.application.ports.agente import EntradaAgente
 from sdr.core.application.ports.ferramenta import Ferramenta, ResultadoFerramenta
 from sdr.core.application.ports.llm import LLMPort, MensagemLLM, PapelLLM
@@ -52,6 +74,14 @@ from sdr.core.domain.agente import (
     Persona,
     RespostaAgente,
     unicos_por_id,
+)
+from sdr.core.domain.atendimento import (
+    AcaoAtendimento,
+    Atendimento,
+    EstadoAtendimento,
+    HorarioAtendimento,
+    MotivoHandoff,
+    TipoAcaoAtendimento,
 )
 from sdr.core.domain.catalogo import ItemCatalogo
 from sdr.core.domain.conversa import Mensagem, Papel, agora
@@ -70,7 +100,12 @@ logger = logging.getLogger(__name__)
 
 FUSO_PADRAO = ZoneInfo("America/Sao_Paulo")
 PASTA_PROMPTS = Path(__file__).resolve().parent / "prompts"
-PROMPT_ROTEADOR = (PASTA_PROMPTS / "roteador_v1.md").read_text(encoding="utf-8")
+PROMPT_ROTEADOR = (PASTA_PROMPTS / "roteador_v2.md").read_text(encoding="utf-8")
+PROMPT_CLASSIFICACAO_ATENDIMENTO = (PASTA_PROMPTS / "atendimento_classificacao_v1.md").read_text(
+    encoding="utf-8"
+)
+PROMPT_ATENDIMENTO = (PASTA_PROMPTS / "atendimento_v1.md").read_text(encoding="utf-8")
+PROMPT_LIMITES = (PASTA_PROMPTS / "limites_v1.md").read_text(encoding="utf-8")
 PROMPT_EXTRACAO = (PASTA_PROMPTS / "extracao_v2.md").read_text(encoding="utf-8")
 PROMPT_INTERPRETACAO_AGENDA = (PASTA_PROMPTS / "agenda_interpretacao_v1.md").read_text(
     encoding="utf-8"
@@ -126,13 +161,22 @@ class EstadoGrafo(TypedDict):
     negociacao: NegociacaoAgenda
     agenda: ResultadoAgenda | None
     interpretacao_agenda: dict[str, object]
+    # Atendimento (IA × humano)
+    atendimento: Atendimento
+    sinal_humano: MotivoHandoff | None
+    quer_agendar: bool
+    fora_do_alcance: bool
+    acao_atendimento: AcaoAtendimento | None
+    atendimento_previsto: Atendimento | None
+    silenciar: bool
+
+
+AUTORES = {Papel.LEAD: "Lead", Papel.ASSISTENTE: "Atendente", Papel.RESPONSAVEL: "Equipe"}
+HORARIO_PADRAO = HorarioAtendimento.de_texto("seg-sex", "09:00-18:00", "America/Sao_Paulo")
 
 
 def _transcricao(historico: Sequence[Mensagem], texto: str, janela: int) -> str:
-    linhas = [
-        f"{'Lead' if m.papel is Papel.LEAD else 'Atendente'}: {m.texto}"
-        for m in list(historico)[-janela:]
-    ]
+    linhas = [f"{AUTORES[m.papel]}: {m.texto}" for m in list(historico)[-janela:]]
     linhas.append(f"Lead: {texto}")
     return "Conversa recente:\n" + "\n".join(linhas)
 
@@ -197,8 +241,10 @@ class AgenteQualificador:
         fuso: ZoneInfo = FUSO_PADRAO,
         agenda: ConduzirAgendamento | None = None,
         relogio: RelogioPort | None = None,
+        horario: HorarioAtendimento = HORARIO_PADRAO,
     ) -> None:
         self._llms = llms
+        self._horario = horario
         self._agenda = agenda
         self._relogio = relogio
         self._persona = persona
@@ -225,12 +271,42 @@ class AgenteQualificador:
         grafo.add_node("ferramentas", self._no_ferramentas)  # type: ignore[call-overload]
         grafo.add_node("agenda", self._no_agenda)  # type: ignore[call-overload]
         grafo.add_node("responder_agenda", self._no_responder_agenda)  # type: ignore[call-overload]
+        grafo.add_node("gate", self._no_gate)  # type: ignore[call-overload]
+        grafo.add_node("silencio", self._no_silencio)  # type: ignore[call-overload]
+        grafo.add_node("espera", self._no_espera)  # type: ignore[call-overload]
+        grafo.add_node("confirmacao_handoff", self._no_confirmacao_handoff)  # type: ignore[call-overload]
+        grafo.add_node("confirmacao_retorno", self._no_confirmacao_retorno)  # type: ignore[call-overload]
+        grafo.add_node("solicitar_handoff", self._no_solicitar_handoff)  # type: ignore[call-overload]
+        grafo.add_node("responder_atendimento", self._no_responder_atendimento)  # type: ignore[call-overload]
 
-        grafo.add_edge(START, "roteador")
+        grafo.add_edge(START, "gate")
+        por_estado = {
+            EstadoAtendimento.ATENDIMENTO_IA: "roteador",
+            EstadoAtendimento.ATENDIMENTO_HUMANO: "silencio",
+            EstadoAtendimento.AGUARDANDO_HUMANO: "espera",
+            EstadoAtendimento.CONFIRMANDO_HANDOFF: "confirmacao_handoff",
+            EstadoAtendimento.CONFIRMANDO_RETORNO_IA: "confirmacao_retorno",
+        }
+        grafo.add_conditional_edges(
+            "gate", lambda e: por_estado[e["atendimento"].estado], sorted(set(por_estado.values()))
+        )
+        grafo.add_edge("silencio", END)
+        for no in ("espera", "confirmacao_handoff", "confirmacao_retorno", "solicitar_handoff"):
+            grafo.add_edge(no, "responder_atendimento")
         grafo.add_conditional_edges(
             "roteador",
-            lambda e: "extracao" if e["intencao_atual"] else "descoberta",
-            {"extracao": "extracao", "descoberta": "descoberta"},
+            lambda e: (
+                "solicitar_handoff"
+                if e["sinal_humano"]
+                else "extracao"
+                if e["intencao_atual"]
+                else "descoberta"
+            ),
+            {
+                "solicitar_handoff": "solicitar_handoff",
+                "extracao": "extracao",
+                "descoberta": "descoberta",
+            },
         )
         grafo.add_edge("extracao", "scoring")
         grafo.add_conditional_edges(
@@ -245,7 +321,7 @@ class AgenteQualificador:
             ),
             {"especialista": "especialista", "responder_agenda": "responder_agenda"},
         )
-        for no in ("especialista", "descoberta", "responder_agenda"):
+        for no in ("especialista", "descoberta", "responder_agenda", "responder_atendimento"):
             grafo.add_conditional_edges(
                 no, self._apos_resposta, {"ferramentas": "ferramentas", END: END}
             )
@@ -256,6 +332,7 @@ class AgenteQualificador:
                 "especialista": "especialista",
                 "descoberta": "descoberta",
                 "responder_agenda": "responder_agenda",
+                "responder_atendimento": "responder_atendimento",
             },
         )
         return grafo.compile()
@@ -286,6 +363,13 @@ class AgenteQualificador:
             "negociacao": entrada.lead.agenda,
             "agenda": None,
             "interpretacao_agenda": {},
+            "atendimento": entrada.lead.atendimento_atual,
+            "sinal_humano": None,
+            "quer_agendar": False,
+            "fora_do_alcance": False,
+            "acao_atendimento": None,
+            "atendimento_previsto": None,
+            "silenciar": False,
         }
         final = cast(
             EstadoGrafo,
@@ -293,11 +377,21 @@ class AgenteQualificador:
                 inicial, config={"recursion_limit": 2 * self._max_passos + 10}
             ),
         )
+        if final["silenciar"]:
+            return RespostaAgente(texto="", silenciar=True, metadados={"no_resposta": "silencio"})
         texto = sem_repeticao(final["mensagens"][-1].conteudo) or self._persona.mensagem_fallback
         metadados: dict[str, object] = {
             "roteamento": final["roteamento"],
             "no_resposta": final["no_resposta"],
         }
+        if (acao := final["acao_atendimento"]) is not None:
+            previsto = final["atendimento_previsto"]
+            metadados["atendimento"] = {
+                "acao": acao.tipo.value,
+                "confirmado": acao.confirmado,
+                "motivo": acao.motivo.value if acao.motivo else None,
+                "estado_previsto": previsto.estado.value if previsto else None,
+            }
         if (agenda := final["agenda"]) is not None:
             metadados["agenda"] = {
                 **final["interpretacao_agenda"],
@@ -321,6 +415,7 @@ class AgenteQualificador:
             eventos=tuple(final["eventos"]),
             campos_faltantes=tuple(final["campos_faltantes"]),
             agenda=final["negociacao"],
+            acao_atendimento=final["acao_atendimento"],
             metadados=metadados,
         )
 
@@ -336,12 +431,27 @@ class AgenteQualificador:
             "properties": {
                 "intencao": {"type": "string", "enum": nomes},
                 "confianca": {"type": "number", "minimum": 0, "maximum": 1},
+                "atendimento_humano": {"type": "string", "enum": SINAIS_HUMANO},
+                "quer_agendar": {"type": "boolean"},
+                "fora_do_alcance": {"type": "boolean"},
             },
-            "required": ["intencao", "confianca"],
+            "required": [
+                "intencao",
+                "confianca",
+                "atendimento_humano",
+                "quer_agendar",
+                "fora_do_alcance",
+            ],
             "additionalProperties": False,
         }
         transcricao = _transcricao(
             estado["historico"], estado["texto"], self._config.janela_extracao
+        )
+        # Isolada: com a fila e falas da equipe no contexto, o modelo "herdava" um pedido de
+        # humano já atendido (visto com LLM real). O sinal vale só para a última fala.
+        transcricao += (
+            f"\n\nÚltima fala do lead (a ÚNICA que vale para atendimento_humano): "
+            f"«{estado['texto']}»"
         )
         resposta = await self._llms.roteador.gerar_estruturado(
             [MensagemLLM(PapelLLM.SISTEMA, sistema), MensagemLLM(PapelLLM.USUARIO, transcricao)],
@@ -369,9 +479,15 @@ class AgenteQualificador:
             "intencao_atual": q.intencao_atual,
             "ficha": dict(q.ficha),
             "eventos": eventos,
+            "sinal_humano": ler_sinal_humano(resposta.dados.get("atendimento_humano", SEM_HANDOFF)),
+            "quer_agendar": resposta.dados.get("quer_agendar") is True,
+            "fora_do_alcance": resposta.dados.get("fora_do_alcance") is True,
             "roteamento": {
                 "classificada": classificada,
                 "confianca": confianca,
+                "atendimento_humano": resposta.dados.get("atendimento_humano"),
+                "quer_agendar": resposta.dados.get("quer_agendar"),
+                "fora_do_alcance": resposta.dados.get("fora_do_alcance"),
                 "modelo": resposta.modelo,
             },
             "tokens_entrada": resposta.tokens_entrada,
@@ -465,6 +581,92 @@ class AgenteQualificador:
             "eventos": eventos,
         }
 
+    # ------------------------------------------------------------------ atendimento
+    @staticmethod
+    async def _no_gate(_: EstadoGrafo) -> dict[str, object]:
+        """Só roteia pelo estado de atendimento (aresta condicional), antes do roteador."""
+        return {}
+
+    @staticmethod
+    async def _no_silencio(_: EstadoGrafo) -> dict[str, object]:
+        """Atendimento humano em curso: a IA não responde (o turno só registra o lote)."""
+        return {"silenciar": True}
+
+    async def _classificar(
+        self, estado: EstadoGrafo, situacao: str, schema: dict[str, object], nome: str
+    ) -> tuple[Mapping[str, object], int, int]:
+        transcricao = _transcricao(
+            estado["historico"], estado["texto"], self._config.janela_extracao
+        )
+        resposta = await self._llms.extracao.gerar_estruturado(
+            [
+                MensagemLLM(
+                    PapelLLM.SISTEMA, PROMPT_CLASSIFICACAO_ATENDIMENTO.format(situacao=situacao)
+                ),
+                MensagemLLM(PapelLLM.USUARIO, transcricao),
+            ],
+            schema,
+            nome,
+        )
+        return resposta.dados, resposta.tokens_entrada, resposta.tokens_saida
+
+    def _decidir(
+        self, estado: EstadoGrafo, acao: AcaoAtendimento, tokens: tuple[int, int] = (0, 0)
+    ) -> dict[str, object]:
+        previsto, _ = acao.aplicar(estado["atendimento"], self._agora())
+        return {
+            "acao_atendimento": acao,
+            "atendimento_previsto": previsto,
+            "tokens_entrada": tokens[0],
+            "tokens_saida": tokens[1],
+        }
+
+    async def _no_solicitar_handoff(self, estado: EstadoGrafo) -> dict[str, object]:
+        acao = AcaoAtendimento(TipoAcaoAtendimento.SOLICITAR_HANDOFF, motivo=estado["sinal_humano"])
+        return self._decidir(estado, acao)
+
+    async def _no_confirmacao_handoff(self, estado: EstadoGrafo) -> dict[str, object]:
+        dados, *tokens = await self._classificar(
+            estado, SITUACAO_HANDOFF, SCHEMA_RESPOSTA, "resposta_handoff"
+        )
+        acao = AcaoAtendimento(
+            TipoAcaoAtendimento.RESPONDER_HANDOFF, confirmado=ler_confirmacao(dados)
+        )
+        return self._decidir(estado, acao, (tokens[0], tokens[1]))
+
+    async def _no_confirmacao_retorno(self, estado: EstadoGrafo) -> dict[str, object]:
+        dados, *tokens = await self._classificar(
+            estado, SITUACAO_RETORNO, SCHEMA_RESPOSTA, "resposta_retorno"
+        )
+        acao = AcaoAtendimento(
+            TipoAcaoAtendimento.RESPONDER_RETORNO_IA, confirmado=ler_confirmacao(dados)
+        )
+        return self._decidir(estado, acao, (tokens[0], tokens[1]))
+
+    async def _no_espera(self, estado: EstadoGrafo) -> dict[str, object]:
+        dados, *tokens = await self._classificar(
+            estado, SITUACAO_ESPERA, SCHEMA_ESPERA, "espera_na_fila"
+        )
+        tipo = (
+            TipoAcaoAtendimento.SOLICITAR_RETORNO_IA
+            if dados.get("quer_voltar_para_assistente") is True
+            else TipoAcaoAtendimento.MENSAGEM_NA_ESPERA
+        )
+        return self._decidir(estado, AcaoAtendimento(tipo), (tokens[0], tokens[1]))
+
+    async def _no_responder_atendimento(self, estado: EstadoGrafo) -> dict[str, object]:
+        novas: list[MensagemLLM] = []
+        if not estado["mensagens"]:
+            bloco = bloco_atendimento(
+                cast(AcaoAtendimento, estado["acao_atendimento"]),
+                estado["atendimento"],
+                cast(Atendimento, estado["atendimento_previsto"]),
+                self._horario,
+                self._agora(),
+            )
+            novas = self._contexto(estado, PROMPT_ATENDIMENTO, bloco)
+        return await self._chamar_agente(estado, novas, "responder_atendimento")
+
     # ------------------------------------------------------------------ agenda
     def _apos_scoring(self, estado: EstadoGrafo) -> str:
         q = estado["qualificacao"]
@@ -472,7 +674,11 @@ class AgenteQualificador:
             return "especialista"
         negociacao = estado["negociacao"]
         em_curso = negociacao.proposta is not None or bool(negociacao.ofertados)
-        return "agenda" if q.proxima_acao or em_curso else "especialista"
+        # Pedido explícito de agendar abre a agenda mesmo antes de qualificar (ex.: o lead
+        # aceitou "quer marcar um horário com a equipe?" depois de uma dúvida sem
+        # resposta — antes disso o grafo voltava ao roteiro de perguntas e "se perdia").
+        quer = q.proxima_acao or em_curso or estado["quer_agendar"]
+        return "agenda" if quer else "especialista"
 
     async def _no_agenda(self, estado: EstadoGrafo) -> dict[str, object]:
         conduzir = cast(ConduzirAgendamento, self._agenda)
@@ -534,6 +740,20 @@ class AgenteQualificador:
         hoje = self._agora().astimezone(fuso).date()
         return bloco_agenda(cast(ResultadoAgenda, estado["agenda"]), fuso, hoje)
 
+    def _limites(self, estado: EstadoGrafo) -> str:
+        """O que a IA consegue fazer, e o próximo passo REAL para o que ela não consegue."""
+        tipo = self._agenda.tipo_para(estado["intencao_atual"]) if self._agenda else None
+        acoes = ["transferir a conversa para uma pessoa da equipe, se a pessoa pedir"]
+        if tipo is not None:
+            acoes.insert(0, f"marcar {tipo.rotulo} (a agenda é sua: você propõe horários reais)")
+            proximo = f"marcar {tipo.rotulo}, onde essa dúvida é resolvida"
+        else:
+            proximo = (
+                "entender melhor o que a pessoa procura e, se ela preferir, transferir para "
+                "uma pessoa da equipe"
+            )
+        return PROMPT_LIMITES.format(acoes="; ".join(acoes), proximo_passo=proximo)
+
     def _agora(self) -> datetime:
         return self._relogio.agora() if self._relogio else datetime.now(self._fuso)
 
@@ -584,6 +804,7 @@ class AgenteQualificador:
         momento = self._agora().astimezone(self._fuso)
         mensagens = [
             MensagemLLM(PapelLLM.SISTEMA, f"{self._persona.prompt_sistema}\n\n{prompt_no}"),
+            MensagemLLM(PapelLLM.SISTEMA, self._limites(estado)),
             MensagemLLM(
                 PapelLLM.SISTEMA,
                 f"Data e hora atuais: {momento:%d/%m/%Y %H:%M} ({self._fuso.key}).",
@@ -592,6 +813,16 @@ class AgenteQualificador:
         for anterior in estado["historico"]:
             if anterior.papel is Papel.LEAD:
                 mensagens.append(MensagemLLM(PapelLLM.USUARIO, anterior.texto))
+                continue
+            if anterior.papel is Papel.RESPONSAVEL:
+                quem = anterior.metadados.get("responsavel") or "pessoa da equipe"
+                mensagens.append(
+                    MensagemLLM(
+                        PapelLLM.SISTEMA,
+                        f"[{quem}, da equipe, escreveu ao lead neste ponto da conversa]: "
+                        f"{anterior.texto}",
+                    )
+                )
                 continue
             mensagens.append(MensagemLLM(PapelLLM.ASSISTENTE, anterior.texto))
             if nota := _nota_itens_citados(anterior):
@@ -636,6 +867,14 @@ class AgenteQualificador:
                 f"Lead QUALIFICADO. Próxima ação: {q.proxima_acao}. Sua ÚNICA pergunta nesta "
                 "mensagem deve conduzir a essa ação, sem combinar data ou horário (isso é "
                 "feito depois). Não pergunte outros dados de qualificação."
+            )
+        elif estado["fora_do_alcance"]:
+            # Com o "próximo dado" no bloco, o modelo emendava a pergunta do roteiro na
+            # oferta (visto com LLM real) e o "sim" do lead ficava ambíguo.
+            linhas.append(
+                "O lead pediu algo que você não tem ou não faz (veja os seus limites): diga "
+                "isso com honestidade e sua ÚNICA pergunta é a oferta do próximo passo real. "
+                "NÃO pergunte nenhum dado de qualificação nesta mensagem."
             )
         elif faltantes:
             linhas += [

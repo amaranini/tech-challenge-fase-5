@@ -43,6 +43,9 @@ class Settings(BaseSettings):
 
     # Operação (vale para qualquer vertical)
     fuso_operacao: str = "America/Sao_Paulo"
+    # Horário de atendimento da equipe (handoff para humano; follow-up respeita no Dia 3D)
+    atendimento_dias: str = "seg-sex"  # ex.: "seg-sex" ou "seg,qua,sex"
+    atendimento_faixas: str = "09:00-18:00"  # ex.: "09:00-12:00,13:00-18:00"
 
     # Agenda: o que pode ser oferecido ao lead
     agenda_antecedencia_horas: float = 2.0  # não oferece horário mais próximo que isso
