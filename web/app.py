@@ -49,6 +49,12 @@ CAMPOS = {
 }
 CAMPOS_EM_REAIS = {"preco_max", "aluguel_max", "ticket"}
 DIAS = ("seg", "ter", "qua", "qui", "sex", "sáb", "dom")
+TIPOS_AGENDAMENTO = {
+    "visita_imovel": "🏠 Visita aos imóveis",
+    "reuniao_especialista": "📈 Reunião com especialista",
+}
+MODALIDADES = {"presencial": "presencial", "online": "online", "escritorio": "no escritório"}
+NAO_INFORMADO = "não informado"
 
 
 def md(texto: object) -> str:
@@ -97,20 +103,25 @@ def descrever_evento(evento: dict[str, Any]) -> str:
             texto = f"**lead qualificado** → {p.get('proxima_acao')}"
         case "LeadCriado":
             texto = "lead criado"
+        case outro:
+            texto = descrever_evento_pos_qualificacao(outro, p)
+    return texto
+
+
+def descrever_evento_pos_qualificacao(tipo: str, p: dict[str, Any]) -> str:
+    match tipo:
         case "AgendamentoCriado":
             quem = f"{p.get('responsavel_nome')} ({p.get('responsavel_titulo')})"
-            texto = (
-                f"📅 **agendado**: {formatar_horario(p.get('inicio'))} com {quem}"
-                f" · {formatar_valor('modalidade', p.get('modalidade'))}"
-            )
+            modalidade = MODALIDADES.get(str(p.get("modalidade")), p.get("modalidade"))
+            return f"📅 **agendado**: {formatar_horario(p.get('inicio'))} com {quem} · {modalidade}"
         case "AgendamentoRemarcado":
             de = formatar_horario(p.get("inicio_anterior"))
-            texto = f"📅 **remarcado**: {de} → {formatar_horario(p.get('inicio'))}"
+            return f"📅 **remarcado**: {de} → {formatar_horario(p.get('inicio'))}"
         case "AgendamentoCancelado":
-            texto = f"📅 **cancelado**: {formatar_horario(p.get('inicio'))}"
-        case outro:
-            texto = str(outro)
-    return texto
+            return f"📅 **cancelado**: {formatar_horario(p.get('inicio'))}"
+        case "ResumoHandoffGerado":
+            return f"📝 resumo v{p.get('versao')} gerado e enviado ao CRM ({p.get('crm_id')})"
+    return tipo
 
 
 def formatar_horario(iso: object) -> str:
@@ -120,6 +131,84 @@ def formatar_horario(iso: object) -> str:
     except ValueError:
         return str(iso)
     return f"{DIAS[momento.weekday()]} {momento:%d/%m %Hh%M}".removesuffix("00")
+
+
+def descrever_agendamento(ag: dict[str, Any]) -> str:
+    tipo = TIPOS_AGENDAMENTO.get(ag["tipo"], ag["tipo"])
+    r = ag["responsavel"]
+    modalidade = MODALIDADES.get(ag["modalidade"], ag["modalidade"])
+    return (
+        f"**{tipo}** · {formatar_horario(ag['inicio'])} com **{r['nome']}** "
+        f"({r['titulo']}) · {modalidade}"
+    )
+
+
+def mostrar_secao(secao: dict[str, Any]) -> None:
+    """Uma seção do resumo de handoff, conforme o tipo (o template vem da vertical)."""
+    st.markdown(f"**{secao['titulo']}**")
+    conteudo = secao["conteudo"]
+    if conteudo == NAO_INFORMADO:
+        st.caption(NAO_INFORMADO)
+        return
+    match secao["tipo"]:
+        case "lista":
+            linhas = [f"- {i['texto']} — _“{i['evidencia']}”_" for i in conteudo]
+        case "itens_catalogo":
+            linhas = [f"- **{i['id']}** {i['titulo']} — {i['reacao']}" for i in conteudo]
+        case "trechos":
+            linhas = [f"> “{trecho}”" for trecho in conteudo]
+        case "ficha":
+            linhas = [
+                f"- {CAMPOS.get(c, c)}: "
+                + (f"_{NAO_INFORMADO}_" if v == NAO_INFORMADO else formatar_valor(c, v))
+                for c, v in conteudo.items()
+            ]
+        case "score":
+            motivos = "".join(f"\n  - {m}" for m in conteudo["motivos"])
+            linhas = [f"- {conteudo['pontos']}/100 · {conteudo['classificacao']}{motivos}"]
+        case "agendamento":
+            situacao = "" if conteudo["status"] == "ativo" else f" ({conteudo['status']})"
+            linhas = [
+                f"- {TIPOS_AGENDAMENTO.get(conteudo['tipo'], conteudo['tipo'])}: "
+                f"{formatar_horario(conteudo['inicio'])} com {conteudo['responsavel']} · "
+                f"{MODALIDADES.get(conteudo['modalidade'], conteudo['modalidade'])}{situacao}"
+            ]
+        case _:
+            linhas = [str(conteudo)]
+    st.markdown(md("\n".join(linhas)))
+
+
+def mostrar_score(lead: dict[str, Any]) -> None:
+    if lead["score"] is None:
+        st.markdown("**Score:** _aguardando a intenção_")
+        return
+    emoji, cor = CLASSIFICACOES.get(lead["classificacao"], ("•", "gray"))
+    st.markdown(f"**Score:** :{cor}[**{lead['score']}/100 · {emoji} {lead['classificacao']}**]")
+    st.progress(min(max(lead["score"], 0), 100) / 100)
+    with st.expander("Por que esse score?", expanded=True):
+        st.markdown(md("\n".join(f"- {m}" for m in lead["score_motivos"])) or "—")
+
+
+def mostrar_resumo(lead_id: str) -> None:
+    try:
+        resposta = httpx.get(f"{API_URL}/leads/{lead_id}/resumo", timeout=TIMEOUT)
+    except httpx.HTTPError:
+        return
+    if resposta.status_code == httpx.codes.NOT_FOUND:
+        st.caption("📝 O resumo para o corretor é gerado quando o lead qualifica ou agenda.")
+        return
+    if resposta.is_error:
+        return
+    resumo: dict[str, Any] = resposta.json()
+    hora = formatar_horario(resumo["gerado_em"])
+    with st.expander(f"📝 {resumo['titulo']} · v{resumo['versao']} ({hora})"):
+        st.caption(f"gerado por {resumo['gatilho']} · também enviado ao CRM")
+        for secao in resumo["secoes"]:
+            mostrar_secao(secao)
+        if resumo["descartados"]:
+            st.caption(
+                f"⚓ {len(resumo['descartados'])} item(ns) descartado(s) por falta de lastro"
+            )
 
 
 def api_get(caminho: str, **params: Any) -> Any:
@@ -258,17 +347,14 @@ def painel(lead_id: str) -> None:
     rotulo = INTENCOES.get(intencao, intencao) if intencao else "❔ indefinida"
     st.markdown(f"**Intenção:** {rotulo}")
 
-    if lead["score"] is None:
-        st.markdown("**Score:** _aguardando a intenção_")
-    else:
-        emoji, cor = CLASSIFICACOES.get(lead["classificacao"], ("•", "gray"))
-        st.markdown(f"**Score:** :{cor}[**{lead['score']}/100 · {emoji} {lead['classificacao']}**]")
-        st.progress(min(max(lead["score"], 0), 100) / 100)
-        with st.expander("Por que esse score?", expanded=True):
-            st.markdown(md("\n".join(f"- {m}" for m in lead["score_motivos"])) or "—")
+    mostrar_score(lead)
 
     if acao := lead["proxima_acao"]:
         st.success(f"**Próxima ação:** {ACOES.get(acao, acao)}")
+    if agendamento := lead.get("agendamento"):
+        st.info(md(f"📅 {descrever_agendamento(agendamento)}"))
+    if lead["proxima_acao"] or agendamento:
+        mostrar_resumo(lead_id)
     elif intencao:
         st.caption("Próxima ação: definida quando os dados essenciais estiverem na ficha")
 

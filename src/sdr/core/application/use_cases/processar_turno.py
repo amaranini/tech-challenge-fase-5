@@ -6,6 +6,7 @@
    descarta a resposta e reprocessa com tudo.
 4. Persiste a resposta, marca o lote como PROCESSADO, grava qualificação, negociação de
    agenda e eventos, e entrega pelo CanalMensagemPort do canal do lead.
+5. Publica os eventos do turno para as reações fora da conversa (PublicadorEventosPort).
 """
 
 import logging
@@ -16,6 +17,7 @@ from uuid import UUID
 from sdr.core.application.ports.agente import AgenteConversacionalPort, EntradaAgente
 from sdr.core.application.ports.canal import CanalMensagemPort
 from sdr.core.application.ports.catalogo import CatalogoPort
+from sdr.core.application.ports.eventos import PublicadorEventosPort
 from sdr.core.application.ports.repositorios import (
     ConversaRepository,
     LeadEventoRepository,
@@ -59,7 +61,9 @@ class ProcessarTurno:
         canais: Mapping[Canal, CanalMensagemPort],
         janela_historico: int = JANELA_HISTORICO_PADRAO,
         max_reprocessamentos: int = MAX_REPROCESSAMENTOS,
+        publicador: PublicadorEventosPort | None = None,
     ) -> None:
+        self._publicador = publicador
         self._leads = leads
         self._conversas = conversas
         self._agente = agente
@@ -161,6 +165,9 @@ class ProcessarTurno:
             logger.error("Sem CanalMensagemPort para o canal %s", lead.canal)
         else:
             await canal.enviar(lead, enviada)
+        # Reações aos eventos (ex.: resumo para o responsável) rodam fora do turno.
+        if self._publicador is not None and resposta.eventos:
+            self._publicador.publicar(resposta.eventos)
 
         return ResultadoTurno(
             lead,

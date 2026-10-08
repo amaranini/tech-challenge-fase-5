@@ -10,7 +10,13 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from sdr.core.domain.agenda import Agendamento, PedidoReserva, Responsavel, Slot
+from sdr.core.domain.agenda import (
+    Agendamento,
+    PedidoReserva,
+    Responsavel,
+    Slot,
+    StatusAgendamento,
+)
 
 
 class AgendaPort(Protocol):
@@ -42,4 +48,15 @@ class AgendaPort(Protocol):
 
     async def agendamento_ativo(self, lead_id: UUID, a_partir_de: datetime) -> Agendamento | None:
         """Agendamento ativo do lead que ainda não terminou (o próximo, se houver vários)."""
+        ...
+
+    async def listar_agendamentos(
+        self,
+        *,
+        lead_id: UUID | None = None,
+        a_partir_de: datetime | None = None,
+        status: StatusAgendamento | None = None,
+        limite: int = 100,
+    ) -> list[Agendamento]:
+        """Em ordem de início (o mais cedo primeiro)."""
         ...

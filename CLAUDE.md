@@ -1,6 +1,6 @@
 # CLAUDE.md — Agente SDR Conversacional (vertical ativa: imobiliário)
 
-## Fase atual: Dia 3 — Etapa A (Agendamento) — entregue, aguardando aceite da PO
+## Fase atual: Dia 3 — Etapa B (Resumo + CRM) — entregue, aguardando aceite da PO
 
 Ao fim de CADA etapa: parar, listar como verificar o critério de aceite e esperar o ok da PO.
 Commits só com ok da PO, um por etapa, na branch `dia-3` (nunca direto na `main`); ao fim
@@ -65,14 +65,17 @@ src/sdr/
                            SchemaFicha, RegrasQualificacao, Score), eventos.py (EventoLead),
                            agenda.py (Responsavel, Slot, Agendamento, TipoAgendamento,
                            RegraAtribuicao, PreferenciaHorario, NegociacaoAgenda e `decidir`
-                           — negociação pura, confirmação explícita antes de executar)
+                           — negociação pura, confirmação explícita antes de executar),
+                           resumo.py (TemplateResumo, FatosResumo, Resumo versionado e a
+                           ancoragem: dados do estado, itens citados, evidência literal)
     application/
       ports/               Protocols: CatalogoPort, EmbeddingPort, VerificadorSaudePort, LLMPort
                            (texto + saída estruturada), AgenteConversacionalPort, Ferramenta,
                            LeadRepository, ConversaRepository, LeadEventoRepository,
                            AgendadorTurnoPort, TravaTurnoPort, CanalMensagemPort (prevê
                            TEMPLATE fora da janela de 24h do WhatsApp), AgendaPort (mock →
-                           Google Calendar/Outlook), RelogioPort; depois CRMPort
+                           Google Calendar/Outlook), RelogioPort, CRMPort (mock → HubSpot),
+                           RedatorResumoPort, ResumoRepository, PublicadorEventosPort
       ferramentas/         tools genéricas do agente (FerramentaBuscarCatalogo → CatalogoPort)
       use_cases/           um caso de uso por arquivo: ReceberMensagem (entrada única de todos
                            os canais: grava PENDENTE e agenda), ProcessarTurno (agrega pendentes,
@@ -80,7 +83,9 @@ src/sdr/
                            ListarLeads, ObterLead (qualificação + campos_faltantes derivados
                            das intenções da vertical + eventos), RecuperarTurnosPendentes,
                            VerificarSaude, ConduzirAgendamento (slots livres dos aptos →
-                           decidir → reservar/remarcar/cancelar só após o "sim")
+                           decidir → reservar/remarcar/cancelar só após o "sim"),
+                           GerarResumoHandoff (assinante dos eventos, FORA do turno),
+                           ObterResumo, ListarAgendamentos
       dto/                 MensagemRecebida normalizada e agnóstica de canal
                            (canal, remetente_id, texto, timestamp, metadados)
     adapters/              infraestrutura GENÉRICA, reaproveitada por qualquer vertical
@@ -93,6 +98,9 @@ src/sdr/
       outbound/persistence/  + trava_turno_postgres.py (advisory lock por lead)
       outbound/persistence/  + agenda_postgres.py (AgendaPort mock: responsaveis, slots_agenda,
                              agendamentos; reserva atômica e idempotente; grade no start/seed)
+      outbound/persistence/  + resumos_sql.py (resumos_handoff) e crm_postgres.py (CRM mock:
+                             crm_registros + log JSON Lines em CRM_MOCK_LOG)
+      outbound/eventos/      PublicadorEventosAsyncio (por lead, em ordem; produção: outbox+fila)
       outbound/relogio.py    RelogioSistema (RelogioPort)
       outbound/turnos/       AgendadorDebounce (asyncio in-process; produção: fila/Redis)
       outbound/canais/       CanalWeb (resposta já persistida; front faz polling)
@@ -103,8 +111,9 @@ src/sdr/
                              especialista ⇄ ferramentas | descoberta (ADR 005) | agenda →
                              responder_agenda (ADR 007); LLM por nó; prompts genéricos em
                              agent/prompts/ (roteador_v1, extracao_v2, agenda_interpretacao_v1,
-                             agendamento_v1); agenda.py (interpretação + bloco com horários
-                             reais); memória vem do banco, não do LangGraph
+                             agendamento_v1, resumo_v1); agenda.py (interpretação + bloco com
+                             horários reais); redator_resumo.py (RedatorResumoPort com LLM);
+                             memória vem do banco, não do LangGraph
     vertical.py            contrato VerticalPack + InfraCompartilhada + VerticalMontada
   verticals/
     imobiliario/
@@ -116,6 +125,7 @@ src/sdr/
                            adapters/agenda_imobiliaria.py (TIPOS_AGENDAMENTO: compra/aluguel →
                            visita_imovel presencial; investimento → reuniao_especialista
                            online|escritorio; leitura dos responsáveis)
+      resumo/template.py   TEMPLATE_RESUMO (seções do resumo para o corretor; puro)
       catalogo/            fatia "catálogo", hexagonal:
         domain/            Imovel, CriteriosBusca, ImovelEncontrado
         application/       ports (ImovelRepository, IndiceImoveisPort, InterpretadorConsultaPort)
@@ -161,8 +171,8 @@ docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
   - `VerticalPack` cresce só quando um campo é USADO (YAGNI). Hoje: catálogo, rotas, carga
     inicial, persona, ferramentas, intenções (schema, prioridade de campos, prompt do
     especialista, próxima ação), regras de qualificação e prompt de descoberta. Depois:
-    agenda (regra_atribuicao, tipos_agendamento, responsaveis_iniciais). Depois: template do
-    resumo e cadência de follow-up. Sem segunda vertical e sem motor de configuração genérico.
+    agenda (regra_atribuicao, tipos_agendamento, responsaveis_iniciais) e template_resumo.
+    Depois: cadência de follow-up. Sem segunda vertical e sem motor de configuração genérico.
   - **Ficha de qualificação:** uma por intenção, em **JSONB** (`{"compra": {...}}`), validada
     campo a campo pelo schema da vertical (Protocol `SchemaFicha`; Pydantic só na vertical).
     Intenção "indefinida" é do core; a vertical nunca a declara.
@@ -209,10 +219,10 @@ docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
 1. Camadas globais: `(main | cli) > bootstrap > (verticals | config) > core`.
 2. `sdr.core` não importa `sdr.verticals`.
 3. Hexágono do core: `vertical > adapters > application > domain` (container `sdr.core`).
-4. Vertical imobiliária: `pack > agenda > (config | catalogo | persona | qualificacao)`;
+4. Vertical imobiliária: `pack > agenda > (config | catalogo | persona | qualificacao | resumo)`;
    fatias hexagonais: `catalogo` (`adapters > application > domain`), `qualificacao` e
    `agenda` (`adapters > domain`).
-5. Núcleos puros (domain/application do core, catalogo, qualificacao.domain e agenda.domain) não importam fastapi, starlette,
+5. Núcleos puros (domain/application do core, catalogo, qualificacao.domain, agenda.domain e resumo) não importam fastapi, starlette,
    pydantic, pydantic_settings, sqlalchemy, psycopg, alembic, streamlit, httpx, uvicorn,
    fastembed, onnxruntime, numpy, pgvector, openai, langgraph, langchain_core (adicionar
    twilio etc. quando entrarem como dependência).
@@ -245,7 +255,11 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
   via `GET /leads/{id}` (inclusive por fala: `{"texto", "esperado"}`; `contagem_eventos`) e
   no painel (AppTest). Cada fala espera a resposta (debounce). Novo cenário = novo JSON.
 - `GET /leads/{lead_id}` — estado de qualificação (intenção, ficha, fichas, campos_faltantes,
-  score, classificação, score_motivos, próxima ação, eventos).
+  score, classificação, score_motivos, próxima ação, eventos, agendamento ativo).
+- `GET /leads/{lead_id}/resumo` (`?versao=N`) — resumo para o responsável (gerado fora do
+  turno em LeadQualificado/AgendamentoCriado; 404 enquanto não existe); `GET /agendamentos`
+  (`?status=ativo&a_partir_de=...`). CRM mock: tabela `crm_registros` + `var/crm_mock.jsonl`
+  (`docker compose exec api tail var/crm_mock.jsonl`). `LLM_MODEL_SUMMARY` para o resumo.
 - Chat: http://localhost:8501 (Streamlit) ou `POST /conversas/mensagens {lead_id, texto}` (202)
   + polling em `GET /conversas/{lead_id}/mensagens` (`processando` = Lia digitando).
 - Testes de integração usam o banco `sdr_test` (recriado e migrado por sessão); não tocam no seed.
@@ -276,7 +290,7 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
     próxima ação no painel; lint-imports, ruff, mypy e pytest passam; `pytest -m llm` passa
 - **Dia 3** — Agendamento + resumo para o responsável + atendimento humano + follow-up
   - Etapa A — Agendamento (AgendaPort mock, nó de agendamento, eventos) — ADR 007
-  - Etapa B — Resumo de handoff (fora do turno) + CRMPort mock + painel
+  - Etapa B — Resumo de handoff (fora do turno, ancorado) + CRMPort mock + painel — ADR 008
   - Etapa C — Máquina de estados de atendimento (handoff para humano) + tela Fila
   - Etapa D — Worker de follow-up (SKIP LOCKED, cadência da vertical, opt-out, SLA)
 - **Dia 4** — Dashboard + WhatsApp (Twilio Sandbox) + observabilidade Langfuse

@@ -29,6 +29,7 @@ from sdr.verticals.imobiliario.config import SettingsImobiliario
 from sdr.verticals.imobiliario.persona.lia import carregar_persona, carregar_prompt
 from sdr.verticals.imobiliario.qualificacao.adapters.intencoes import definir_intencoes
 from sdr.verticals.imobiliario.qualificacao.domain.regras import RegrasImobiliarias
+from sdr.verticals.imobiliario.resumo.template import TEMPLATE_RESUMO
 
 DADOS = Path(__file__).resolve().parent / "dados"
 CATALOGO_INICIAL = DADOS / "imoveis.json"
@@ -83,4 +84,5 @@ class PackImobiliario:
             regra_atribuicao=RegraAtribuicaoImobiliaria(zona_por_bairro),
             tipos_agendamento=TIPOS_AGENDAMENTO,
             responsaveis_iniciais=ler_responsaveis(RESPONSAVEIS),
+            template_resumo=TEMPLATE_RESUMO,
         )

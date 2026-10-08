@@ -19,6 +19,7 @@ class TipoEvento(StrEnum):
     AGENDAMENTO_CRIADO = "AgendamentoCriado"
     AGENDAMENTO_REMARCADO = "AgendamentoRemarcado"
     AGENDAMENTO_CANCELADO = "AgendamentoCancelado"
+    RESUMO_GERADO = "ResumoHandoffGerado"
 
 
 @dataclass(frozen=True)

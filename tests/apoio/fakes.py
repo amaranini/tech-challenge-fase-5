@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from sdr.core.application.ports.agente import EntradaAgente
+from sdr.core.application.ports.crm import RegistroCRM
 from sdr.core.application.ports.llm import (
     ChamadaFerramenta,
     DefinicaoFerramenta,
@@ -36,6 +37,14 @@ from sdr.core.domain.catalogo import (
 )
 from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem, StatusMensagem
 from sdr.core.domain.eventos import EventoLead
+from sdr.core.domain.resumo import (
+    AfirmacaoChecada,
+    FatosResumo,
+    FonteAfirmacao,
+    RascunhoResumo,
+    Resumo,
+    TemplateResumo,
+)
 
 DIMENSAO_FAKE = 64
 
@@ -401,6 +410,25 @@ class AgendaFake:
             self.agendamentos[agendamento_id] = atual
         return atual
 
+    async def listar_agendamentos(
+        self,
+        *,
+        lead_id: UUID | None = None,
+        a_partir_de: datetime | None = None,
+        status: StatusAgendamento | None = None,
+        limite: int = 100,
+    ) -> list[Agendamento]:
+        return sorted(
+            (
+                a
+                for a in self.agendamentos.values()
+                if (lead_id is None or a.lead_id == lead_id)
+                and (a_partir_de is None or a.fim > a_partir_de)
+                and (status is None or a.status is status)
+            ),
+            key=lambda a: a.inicio,
+        )[:limite]
+
     async def agendamento_ativo(self, lead_id: UUID, a_partir_de: datetime) -> Agendamento | None:
         ativos = [
             a
@@ -408,3 +436,73 @@ class AgendaFake:
             if a.lead_id == lead_id and a.status is StatusAgendamento.ATIVO and a.fim > a_partir_de
         ]
         return min(ativos, key=lambda a: a.inicio) if ativos else None
+
+
+# ---------------------------------------------------------------- resumo / CRM
+
+
+class RedatorRoteirizado:
+    """Redator fake: devolve seções pré-definidas e guarda os fatos recebidos.
+
+    Checagem: por padrão, cada texto é UMA frase sustentada (recomendação); `checagens`
+    sobrescreve por seção."""
+
+    def __init__(
+        self,
+        *rascunhos: Mapping[str, object],
+        checagens: Mapping[str, Sequence[AfirmacaoChecada]] | None = None,
+    ) -> None:
+        self._rascunhos = list(rascunhos)
+        self._checagens = dict(checagens or {})
+        self.fatos: list[FatosResumo] = []
+        self.checados: list[Mapping[str, str]] = []
+
+    async def checar(
+        self, fatos: FatosResumo, textos: Mapping[str, str]
+    ) -> Mapping[str, Sequence[AfirmacaoChecada]]:
+        self.checados.append(dict(textos))
+        return {
+            chave: self._checagens.get(
+                chave, [AfirmacaoChecada(texto, True, FonteAfirmacao.RECOMENDACAO)]
+            )
+            for chave, texto in textos.items()
+        }
+
+    async def redigir(self, fatos: FatosResumo, template: TemplateResumo) -> RascunhoResumo:
+        self.fatos.append(fatos)
+        secoes = self._rascunhos.pop(0) if self._rascunhos else {}
+        return RascunhoResumo(dict(secoes), "fake-1", 100, 50)
+
+
+class ResumoRepositoryFake:
+    def __init__(self) -> None:
+        self.resumos: list[Resumo] = []
+
+    async def salvar(self, resumo: Resumo) -> None:
+        if any(r.lead_id == resumo.lead_id and r.versao == resumo.versao for r in self.resumos):
+            raise AssertionError("versão duplicada")
+        self.resumos.append(resumo)
+
+    async def ultimo(self, lead_id: UUID) -> Resumo | None:
+        do_lead = [r for r in self.resumos if r.lead_id == lead_id]
+        return max(do_lead, key=lambda r: r.versao, default=None)
+
+    async def obter(self, lead_id: UUID, versao: int) -> Resumo | None:
+        return next((r for r in self.resumos if r.lead_id == lead_id and r.versao == versao), None)
+
+    async def versoes(self, lead_id: UUID) -> list[int]:
+        return sorted(r.versao for r in self.resumos if r.lead_id == lead_id)
+
+
+class CRMFake:
+    def __init__(self) -> None:
+        self.registros: dict[UUID, tuple[Lead, Resumo, Agendamento | None]] = {}
+        self.chamadas = 0
+
+    async def registrar(
+        self, lead: Lead, resumo: Resumo, agendamento: Agendamento | None
+    ) -> RegistroCRM:
+        self.chamadas += 1
+        criado = lead.id not in self.registros
+        self.registros[lead.id] = (lead, resumo, agendamento)
+        return RegistroCRM(f"CRM-{lead.id.hex[:4]}", criado, resumo.gerado_em)

@@ -150,3 +150,43 @@ class AgendamentoModel(Base):
         Index("ix_agendamentos_lead_status", "lead_id", "status"),
         Index("ix_agendamentos_inicio", "inicio"),
     )
+
+
+class ResumoHandoffModel(Base):
+    """Versões do resumo para o responsável (uma linha por versão)."""
+
+    __tablename__ = "resumos_handoff"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    lead_id: Mapped[UUID] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"))
+    versao: Mapped[int] = mapped_column(Integer)
+    gerado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    gatilho: Mapped[str] = mapped_column(String(50))
+    template_versao: Mapped[str] = mapped_column(String(50))
+    titulo: Mapped[str] = mapped_column(String(200))
+    secoes: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    impressao: Mapped[str] = mapped_column(String(64))
+    descartados: Mapped[list[str]] = mapped_column(JSONB, server_default="[]")
+    modelo: Mapped[str | None] = mapped_column(String(100))
+    tokens_entrada: Mapped[int] = mapped_column(Integer, server_default="0")
+    tokens_saida: Mapped[int] = mapped_column(Integer, server_default="0")
+
+    __table_args__ = (UniqueConstraint("lead_id", "versao", name="uq_resumos_handoff_versao"),)
+
+
+# ---------------------------------------------------------------------- CRM (mock)
+# Produção: HubSpot (ou outro CRM) — contato/negócio via API, resumo anexado como nota.
+
+
+class CrmRegistroModel(Base):
+    __tablename__ = "crm_registros"
+
+    lead_id: Mapped[UUID] = mapped_column(
+        ForeignKey("leads.id", ondelete="CASCADE"), primary_key=True
+    )
+    crm_id: Mapped[str] = mapped_column(String(50), unique=True)
+    dados: Mapped[dict[str, Any]] = mapped_column(JSONB)  # o lead como o CRM o vê
+    resumo_versao: Mapped[int] = mapped_column(Integer)
+    resumo: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    atualizado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))

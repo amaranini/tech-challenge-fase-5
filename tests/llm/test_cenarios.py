@@ -13,8 +13,9 @@ from typing import Any
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from tests.apoio.api_viva import enviar, exigir_api, obter_lead
-from tests.apoio.cenarios import Cenario, carregar_cenarios, divergencias
+from tests.apoio.api_viva import aguardar_resumo, enviar, exigir_api, historico, obter_lead
+from tests.apoio.banco_vivo import registro_crm
+from tests.apoio.cenarios import Cenario, carregar_cenarios, divergencias, divergencias_resumo
 
 pytestmark = pytest.mark.llm
 
@@ -56,6 +57,9 @@ def _conferir_painel(lead_id: str, estado: dict[str, Any]) -> None:
     assert f"Ficha de {estado['intencao']}" in textos
     if estado["proxima_acao"]:
         assert painel.success, "o painel deveria destacar a próxima ação"
+    if estado.get("agendamento"):
+        assert painel.info, "o painel deveria mostrar o agendamento"
+        assert any("Resumo do lead" in e.label for e in painel.expander), "falta o resumo"
 
 
 @pytest.mark.parametrize("cenario", CENARIOS, ids=[c.nome for c in CENARIOS])
@@ -76,4 +80,21 @@ def test_cenario(cenario: Cenario) -> None:
     print(f"--- estado final\n{_resumo(estado)}")
     erros = divergencias(estado, cenario.esperado)
     assert not erros, f"{cenario.arquivo.name}:\n- " + "\n- ".join(erros)
+    if esperado_resumo := cenario.esperado.get("resumo"):
+        _conferir_resumo(lead_id, esperado_resumo, cenario)
     _conferir_painel(lead_id, estado)
+
+
+def _conferir_resumo(lead_id: str, esperado: dict[str, Any], cenario: Cenario) -> None:
+    """Resumo gerado fora do turno: seções esperadas, nada inventado e cópia no CRM mock."""
+    resumo = aguardar_resumo(lead_id, esperado.get("gatilho"))
+    print(f"--- resumo v{resumo['versao']} ({resumo['gatilho']})")
+    for secao in resumo["secoes"]:
+        print(f"  {secao['titulo']}: {json.dumps(secao['conteudo'], ensure_ascii=False)}")
+    if resumo["descartados"]:
+        print(f"  [ancoragem descartou] {resumo['descartados']}")
+    erros = divergencias_resumo(resumo, esperado, historico(lead_id)["mensagens"])
+    assert not erros, f"{cenario.arquivo.name} (resumo):\n- " + "\n- ".join(erros)
+    crm = registro_crm(lead_id)
+    assert crm is not None, "lead não chegou ao CRM mock"
+    assert crm["resumo_versao"] == resumo["versao"]

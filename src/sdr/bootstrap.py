@@ -9,6 +9,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI
@@ -22,16 +23,20 @@ from sdr.core.adapters.outbound.agent.agente_qualificador import (
     ConfigQualificacao,
     LLMsPorNo,
 )
+from sdr.core.adapters.outbound.agent.redator_resumo import RedatorResumoLLM
 from sdr.core.adapters.outbound.canais.canal_web import CanalWeb
 from sdr.core.adapters.outbound.embeddings.fastembed_adapter import EmbeddingFastembed
+from sdr.core.adapters.outbound.eventos.publicador_asyncio import PublicadorEventosAsyncio
 from sdr.core.adapters.outbound.llm.openai_adapter import LLMOpenAI
 from sdr.core.adapters.outbound.persistence.agenda_postgres import AgendaPostgres
+from sdr.core.adapters.outbound.persistence.crm_postgres import CRMPostgresMock
 from sdr.core.adapters.outbound.persistence.database import criar_engine, criar_fabrica_sessao
 from sdr.core.adapters.outbound.persistence.repositorios_conversa_sql import (
     ConversaRepositorySql,
     LeadEventoRepositorySql,
     LeadRepositorySql,
 )
+from sdr.core.adapters.outbound.persistence.resumos_sql import ResumoRepositorySql
 from sdr.core.adapters.outbound.persistence.trava_turno_postgres import TravaTurnoPostgres
 from sdr.core.adapters.outbound.persistence.verificador_saude_postgres import (
     VerificadorSaudePostgres,
@@ -40,11 +45,16 @@ from sdr.core.adapters.outbound.relogio import RelogioSistema
 from sdr.core.adapters.outbound.turnos.agendador_debounce import AgendadorDebounce
 from sdr.core.application.ports.llm import LLMPort
 from sdr.core.application.use_cases.conduzir_agendamento import ConduzirAgendamento
+from sdr.core.application.use_cases.consultar_agenda_e_resumo import (
+    ListarAgendamentos,
+    ObterResumo,
+)
 from sdr.core.application.use_cases.consultar_conversas import (
     ListarLeads,
     ObterHistorico,
     RecuperarTurnosPendentes,
 )
+from sdr.core.application.use_cases.gerar_resumo_handoff import GerarResumoHandoff
 from sdr.core.application.use_cases.obter_lead import ObterLead
 from sdr.core.application.use_cases.processar_turno import ProcessarTurno
 from sdr.core.application.use_cases.receber_mensagem import ReceberMensagem
@@ -89,6 +99,10 @@ class Container:
     obter_historico: ObterHistorico
     listar_leads: ListarLeads
     obter_lead: ObterLead
+    obter_resumo: ObterResumo
+    listar_agendamentos: ListarAgendamentos
+    publicador: PublicadorEventosAsyncio
+    gerar_resumo: GerarResumoHandoff | None
     agenda: AgendaPostgres
     relogio: RelogioSistema
     settings: Settings
@@ -109,6 +123,7 @@ class Container:
 
     async def encerrar(self) -> None:
         await self.agendador.encerrar()
+        await self.publicador.encerrar()
         await self.engine.dispose()
 
 
@@ -175,6 +190,29 @@ def montar_container(settings: Settings | None = None) -> Container:
         relogio=relogio,
     )
 
+    # Reações fora do turno: resumo para o responsável + CRM (se a vertical tem template).
+    publicador = PublicadorEventosAsyncio()
+    resumos = ResumoRepositorySql(sessoes)
+    gerar_resumo = None
+    if vertical.template_resumo is not None:
+        gerar_resumo = GerarResumoHandoff(
+            leads,
+            conversas,
+            eventos,
+            resumos=resumos,
+            redator=RedatorResumoLLM(
+                criar_llm(settings, settings.llm_model_summary or settings.llm_modelo), fuso
+            ),
+            crm=CRMPostgresMock(
+                sessoes, Path(settings.crm_mock_log) if settings.crm_mock_log else None
+            ),
+            agenda=agenda,
+            relogio=relogio,
+            template=vertical.template_resumo,
+            intencoes=vertical.intencoes,
+        )
+        publicador.assinar(gerar_resumo.ao_publicar)
+
     agendador = AgendadorDebounce(settings.debounce_segundos, settings.debounce_max_segundos)
     processar_turno = ProcessarTurno(
         leads,
@@ -187,6 +225,7 @@ def montar_container(settings: Settings | None = None) -> Container:
         agendador=agendador,
         canais={Canal.WEB: CanalWeb()},
         janela_historico=settings.conversa_janela_historico,
+        publicador=publicador,
     )
     agendador.definir_executor(processar_turno.executar)
 
@@ -202,7 +241,11 @@ def montar_container(settings: Settings | None = None) -> Container:
         recuperar_turnos=RecuperarTurnosPendentes(conversas, agendador),
         obter_historico=ObterHistorico(leads, conversas),
         listar_leads=ListarLeads(leads),
-        obter_lead=ObterLead(leads, eventos, vertical.intencoes),
+        obter_lead=ObterLead(leads, eventos, vertical.intencoes, agenda, relogio),
+        obter_resumo=ObterResumo(leads, resumos),
+        listar_agendamentos=ListarAgendamentos(agenda, leads),
+        publicador=publicador,
+        gerar_resumo=gerar_resumo,
         agenda=agenda,
         relogio=relogio,
         settings=settings,
@@ -232,6 +275,8 @@ def criar_aplicacao(settings: Settings | None = None) -> FastAPI:
             obter_historico=lambda: container.obter_historico,
             listar_leads=lambda: container.listar_leads,
             obter_lead=lambda: container.obter_lead,
+            obter_resumo=lambda: container.obter_resumo,
+            listar_agendamentos=lambda: container.listar_agendamentos,
         ),
         routers=container.vertical.routers,
         ao_iniciar=[

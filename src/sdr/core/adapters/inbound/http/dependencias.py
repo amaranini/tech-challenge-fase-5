@@ -3,6 +3,10 @@ from dataclasses import dataclass
 
 from fastapi import Request
 
+from sdr.core.application.use_cases.consultar_agenda_e_resumo import (
+    ListarAgendamentos,
+    ObterResumo,
+)
 from sdr.core.application.use_cases.consultar_conversas import ListarLeads, ObterHistorico
 from sdr.core.application.use_cases.obter_lead import ObterLead
 from sdr.core.application.use_cases.receber_mensagem import ReceberMensagem
@@ -21,6 +25,8 @@ class Dependencias:
     obter_historico: Callable[[], ObterHistorico]
     listar_leads: Callable[[], ListarLeads]
     obter_lead: Callable[[], ObterLead]
+    obter_resumo: Callable[[], ObterResumo]
+    listar_agendamentos: Callable[[], ListarAgendamentos]
 
 
 def obter_dependencias(request: Request) -> Dependencias:
@@ -46,3 +52,11 @@ def obter_listar_leads(request: Request) -> ListarLeads:
 
 def obter_obter_lead(request: Request) -> ObterLead:
     return obter_dependencias(request).obter_lead()
+
+
+def obter_obter_resumo(request: Request) -> ObterResumo:
+    return obter_dependencias(request).obter_resumo()
+
+
+def obter_listar_agendamentos(request: Request) -> ListarAgendamentos:
+    return obter_dependencias(request).listar_agendamentos()

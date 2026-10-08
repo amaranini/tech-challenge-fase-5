@@ -15,7 +15,11 @@ Formato de um roteiro:
         "fichas": {"aluguel": {"aluguel_max": 4000}},           # ficha de outra intenção
         "eventos": [{"tipo": "IntencaoAlterada", "payload": {"de": "aluguel"}}],
         "eventos_ausentes": ["IntencaoAlterada"],
-        "contagem_eventos": {"AgendamentoCriado": 1}        # quantas vezes ocorreu
+        "contagem_eventos": {"AgendamentoCriado": 1},       # quantas vezes ocorreu
+        "resumo": {                                         # resumo de handoff (fora do turno)
+          "gatilho": "AgendamentoCriado",
+          "secoes": {"agendamento": {"preenchido": true}}   # conteúdo de cada seção
+        }
       }
     }
 
@@ -107,7 +111,7 @@ def confere(valor: object, esperado: object) -> bool:
     if "dia_semana" in esperado or "periodo" in esperado:
         return _confere_horario(valor, esperado)
     if "preenchido" in esperado:
-        return (valor not in (None, "", [], {})) == esperado["preenchido"]
+        return (valor not in (None, "", [], {}, "não informado")) == esperado["preenchido"]
     if "um_de" in esperado:
         return valor in esperado["um_de"]
     if "contem" in esperado:
@@ -161,4 +165,44 @@ def divergencias(estado: dict[str, Any], esperado: dict[str, Any]) -> list[str]:
         for tipo in esperado.get("eventos_ausentes", [])
         if any(e["tipo"] == tipo for e in eventos)
     ]
+    return erros
+
+
+def _falas_do_lead(mensagens: list[dict[str, Any]]) -> str:
+    return " \n ".join(
+        " ".join(m["texto"].casefold().split()) for m in mensagens if m["papel"] == "lead"
+    )
+
+
+def _literal(trecho: object, falas: str) -> bool:
+    alvo = " ".join(str(trecho).casefold().split()).strip(" \"'“”.,;:!?…")
+    return bool(alvo) and alvo in falas
+
+
+def divergencias_resumo(
+    resumo: dict[str, Any], esperado: dict[str, Any], mensagens: list[dict[str, Any]]
+) -> list[str]:
+    """Confere as seções esperadas e que NADA no resumo foi inventado: imóveis só os
+    citados na conversa; trechos e evidências, falas literais do lead."""
+    secoes = {s["chave"]: s for s in resumo["secoes"]}
+    erros = [
+        f"resumo.{chave}: esperado {exp!r}, obtido {secoes.get(chave, {}).get('conteudo')!r}"
+        for chave, exp in esperado.get("secoes", {}).items()
+        if not confere(secoes.get(chave, {}).get("conteudo"), exp)
+    ]
+    falas = _falas_do_lead(mensagens)
+    citados = {
+        item["id"] for m in mensagens for item in m.get("itens_citados", []) if item.get("id")
+    }
+    for secao in resumo["secoes"]:
+        conteudo = secao["conteudo"]
+        if not isinstance(conteudo, list):
+            continue
+        for item in conteudo:
+            if secao["tipo"] == "itens_catalogo" and item["id"] not in citados:
+                erros.append(f"resumo.{secao['chave']}: {item['id']} nunca foi citado")
+            if secao["tipo"] == "trechos" and not _literal(item, falas):
+                erros.append(f"resumo.{secao['chave']}: trecho inventado {item!r}")
+            if secao["tipo"] == "lista" and not _literal(item["evidencia"], falas):
+                erros.append(f"resumo.{secao['chave']}: evidência inventada {item!r}")
     return erros

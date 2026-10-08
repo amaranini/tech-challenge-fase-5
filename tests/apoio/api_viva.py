@@ -60,3 +60,23 @@ def obter_lead(lead_id: str) -> dict[str, Any]:
     resposta.raise_for_status()
     corpo: dict[str, Any] = resposta.json()
     return corpo
+
+
+def historico(lead_id: str) -> dict[str, Any]:
+    resposta = httpx.get(f"{API_URL}/conversas/{lead_id}/mensagens", timeout=30)
+    resposta.raise_for_status()
+    corpo: dict[str, Any] = resposta.json()
+    return corpo
+
+
+def aguardar_resumo(lead_id: str, gatilho: str | None, timeout: float = 120) -> dict[str, Any]:
+    """O resumo é gerado FORA do turno: espera a versão do gatilho esperado aparecer."""
+    limite = time.monotonic() + timeout
+    while time.monotonic() < limite:
+        resposta = httpx.get(f"{API_URL}/leads/{lead_id}/resumo", timeout=30)
+        if resposta.status_code == httpx.codes.OK:
+            corpo: dict[str, Any] = resposta.json()
+            if gatilho is None or corpo["gatilho"] == gatilho:
+                return corpo
+        time.sleep(2)
+    raise AssertionError(f"sem resumo ({gatilho}) para {lead_id} em {timeout}s")

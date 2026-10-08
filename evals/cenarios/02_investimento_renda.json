@@ -66,6 +66,14 @@
     ],
     "contagem_eventos": {
       "AgendamentoCriado": 1
+    },
+    "resumo": {
+      "gatilho": "AgendamentoCriado",
+      "secoes": {
+        "agendamento": {
+          "preenchido": true
+        }
+      }
     }
   }
 }

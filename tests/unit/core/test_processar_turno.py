@@ -272,3 +272,37 @@ async def test_grava_a_negociacao_de_agenda_do_turno() -> None:
     await cenario.processar()
 
     assert cenario.leads.leads[cenario.lead.id].agenda == negociacao
+
+
+class PublicadorFake:
+    def __init__(self, canal: CanalFake) -> None:
+        self.canal = canal
+        self.publicados: list[tuple[list[EventoLead], int]] = []
+
+    def publicar(self, eventos: list[EventoLead]) -> None:
+        self.publicados.append((list(eventos), len(self.canal.enviadas)))
+
+
+async def test_publica_os_eventos_do_turno_depois_de_enviar_a_resposta() -> None:
+    cenario = Cenario()
+    evento_q = EventoLead(cenario.lead.id, TipoEvento.LEAD_QUALIFICADO, datetime.now(UTC))
+    cenario.agente = AgenteRoteirizado(RespostaAgente("Bora agendar?", eventos=(evento_q,)))
+    publicador = PublicadorFake(cenario.canal)
+    cenario.turno = ProcessarTurno(
+        cenario.leads,
+        cenario.conversas,
+        cenario.agente,
+        cenario.catalogo,
+        eventos=cenario.eventos,
+        persona=PERSONA,
+        trava=cenario.trava,
+        agendador=cenario.agendador,
+        canais={Canal.WEB: cenario.canal},
+        publicador=publicador,
+    )
+    cenario.chega("vou financiar")
+
+    await cenario.processar()
+
+    assert publicador.publicados == [([evento_q], 1)]  # 1 = a resposta já tinha saído
+    assert cenario.eventos.eventos == [evento_q]  # gravado antes de publicar

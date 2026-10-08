@@ -45,3 +45,17 @@ def test_montar_entrega_agenda_da_vertical() -> None:
         "compra", {"regiao": "Moema"}, montada.responsaveis_iniciais
     )
     assert [r.titulo for r in compra_moema] == ["corretor da zona sul"]
+
+    assert montada.template_resumo is not None
+    chaves = [s.chave for s in montada.template_resumo.secoes]
+    assert chaves == [
+        "perfil",
+        "necessidades",
+        "score",
+        "imoveis_sugeridos",
+        "objecoes",
+        "perguntas_em_aberto",
+        "agendamento",
+        "proximo_passo",
+        "trechos_chave",
+    ]

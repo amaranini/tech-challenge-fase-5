@@ -129,6 +129,28 @@ class AgendaPostgres:
             ).first()
         return _agendamento(*linha) if linha else None
 
+    async def listar_agendamentos(
+        self,
+        *,
+        lead_id: UUID | None = None,
+        a_partir_de: datetime | None = None,
+        status: StatusAgendamento | None = None,
+        limite: int = 100,
+    ) -> list[Agendamento]:
+        stmt = select(AgendamentoModel, ResponsavelModel).join(
+            ResponsavelModel, ResponsavelModel.id == AgendamentoModel.responsavel_id
+        )
+        if lead_id is not None:
+            stmt = stmt.where(AgendamentoModel.lead_id == lead_id)
+        if a_partir_de is not None:
+            stmt = stmt.where(AgendamentoModel.fim > a_partir_de)
+        if status is not None:
+            stmt = stmt.where(AgendamentoModel.status == status.value)
+        stmt = stmt.order_by(AgendamentoModel.inicio).limit(limite)
+        async with self._sessoes() as sessao:
+            linhas = (await sessao.execute(stmt)).all()
+        return [_agendamento(m, r) for m, r in linhas]
+
     async def _obter(self, sessao: AsyncSession, agendamento_id: UUID) -> Agendamento:
         linha = (
             await sessao.execute(

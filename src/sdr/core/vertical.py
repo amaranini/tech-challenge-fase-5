@@ -5,8 +5,8 @@ Hoje o contrato tem só o necessário: catálogo, rotas, carga inicial, persona 
 versionado), ferramentas do agente, qualificação (intenções com schema, prioridade de
 campos e prompt do especialista; regras de scoring e critério de qualificado; prompt de
 descoberta) e agenda (quem atende cada lead, o que se agenda em cada intenção e os
-responsáveis iniciais do mock). Entra quando for usado: resumo para o responsável e
-cadência de follow-up.
+responsáveis iniciais do mock) e o template do resumo para o responsável. Entra quando
+for usado: cadência de follow-up.
 """
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -22,6 +22,7 @@ from sdr.core.application.ports.ferramenta import Ferramenta
 from sdr.core.domain.agenda import RegraAtribuicao, Responsavel, TipoAgendamento
 from sdr.core.domain.agente import Persona
 from sdr.core.domain.qualificacao import IntencaoVertical, RegrasQualificacao
+from sdr.core.domain.resumo import TemplateResumo
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,8 @@ class VerticalMontada:
     regra_atribuicao: RegraAtribuicao | None = None
     tipos_agendamento: Mapping[str, TipoAgendamento] = field(default_factory=dict)  # por intenção
     responsaveis_iniciais: Sequence[Responsavel] = field(default_factory=tuple)  # seed do mock
+    # Resumo para o responsável (sem template, o core não gera resumo)
+    template_resumo: TemplateResumo | None = None
 
 
 class VerticalPack(Protocol):

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     llm_model_router: str | None = None  # roteador de intenção (se vazio, usa llm_modelo)
     llm_model_agent: str | None = None  # especialistas e descoberta
     llm_model_extraction: str | None = None  # extração estruturada da ficha
+    llm_model_summary: str | None = None  # resumo para o responsável (fora do turno)
     llm_temperatura: float | None = 0.4
     llm_timeout_s: float = 40.0
     openai_api_key: SecretStr | None = None
@@ -52,6 +53,9 @@ class Settings(BaseSettings):
     agenda_mock_hora_inicio: int = 9
     agenda_mock_hora_fim: int = 20  # último slot termina neste horário
     agenda_mock_duracao_min: int = 60
+
+    # CRM mock (Postgres + log JSON Lines). Produção: HubSpot ou outro CRM.
+    crm_mock_log: str | None = "var/crm_mock.jsonl"
 
 
 @lru_cache

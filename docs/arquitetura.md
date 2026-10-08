@@ -13,7 +13,9 @@ Este documento descreve como o sistema é organizado. Ele se apoia em três deci
 - **turnos assíncronos com agregação de mensagens (debounce):**
   [ADR 006](adr/006-processamento-assincrono-debounce.md);
 - **agendamento (AgendaPort, mock em Postgres, nó de agenda no grafo):**
-  [ADR 007](adr/007-agendamento-agenda-mock.md).
+  [ADR 007](adr/007-agendamento-agenda-mock.md);
+- **resumo para o responsável fora do turno, ancorado, e CRMPort:**
+  [ADR 008](adr/008-resumo-handoff-crm.md).
 
 ## 1. Contexto
 
@@ -99,13 +101,13 @@ flowchart TB
             http[http — app FastAPI<br/>/health · /conversas · /leads · /leads/&#123;id&#125;]
         end
         subgraph capp[application — sem frameworks]
-            cuc[use_cases<br/>ReceberMensagem · ProcessarTurno · ObterHistorico<br/>ListarLeads · ObterLead · RecuperarTurnosPendentes · VerificarSaude<br/>ConduzirAgendamento]
-            cports{{ports<br/>CatalogoPort · EmbeddingPort · LLMPort · Ferramenta<br/>LeadRepository · ConversaRepository · LeadEventoRepository<br/>AgenteConversacionalPort · AgendadorTurnoPort · TravaTurnoPort · CanalMensagemPort<br/>AgendaPort · RelogioPort}}
+            cuc[use_cases<br/>ReceberMensagem · ProcessarTurno · ObterHistorico<br/>ListarLeads · ObterLead · RecuperarTurnosPendentes · VerificarSaude<br/>ConduzirAgendamento · GerarResumoHandoff · ObterResumo · ListarAgendamentos]
+            cports{{ports<br/>CatalogoPort · EmbeddingPort · LLMPort · Ferramenta<br/>LeadRepository · ConversaRepository · LeadEventoRepository<br/>AgenteConversacionalPort · AgendadorTurnoPort · TravaTurnoPort · CanalMensagemPort<br/>AgendaPort · RelogioPort · CRMPort · RedatorResumoPort · ResumoRepository · PublicadorEventosPort}}
             cferr[ferramentas<br/>FerramentaBuscarCatalogo]
         end
         cdom[domain — sem frameworks<br/>Lead · Conversa · Mensagem · Persona · ItemCatalogo<br/>Qualificacao · Score · EventoLead<br/>Responsavel · Slot · Agendamento · NegociacaoAgenda]
         subgraph cout[adapters/outbound]
-            persist[persistence<br/>engine · Base ORM · leads/conversas/mensagens/lead_eventos<br/>AgendaPostgres — mock: responsaveis/slots_agenda/agendamentos]
+            persist[persistence<br/>engine · Base ORM · leads/conversas/mensagens/lead_eventos<br/>AgendaPostgres — mock: responsaveis/slots_agenda/agendamentos<br/>resumos_handoff · CRMPostgresMock — crm_registros + log JSON]
             emb[embeddings<br/>fastembed]
             llm[llm — OpenAI]
             agent[agent — LangGraph<br/>AgenteQualificador]
@@ -270,6 +272,31 @@ stateDiagram-v2
     Agendado --> AguardandoConfirmacao: remarcar / cancelar (sempre confirma)
     Agendado --> SemProposta: cancelado
     SemProposta --> NaoInsistir: lead não quer agendar agora
+```
+
+### Resumo para o responsável (fora do turno, [ADR 008](adr/008-resumo-handoff-crm.md))
+
+```mermaid
+sequenceDiagram
+    participant PT as ProcessarTurno
+    participant C as CanalMensagemPort
+    participant P as PublicadorEventosPort<br/>(asyncio; produção: outbox+fila)
+    participant G as GerarResumoHandoff
+    participant R as RedatorResumoPort (LLM)
+    participant DB as resumos_handoff
+    participant CRM as CRMPort (mock → HubSpot)
+
+    PT->>C: envia a resposta da Lia
+    PT->>P: publicar(eventos do turno)
+    Note over PT: turno termina aqui
+    P-->>G: LeadQualificado / AgendamentoCriado / atualização
+    G->>G: fatos do lead + impressão digital (igual à última? para)
+    G->>R: redigir(fatos, TemplateResumo da vertical)
+    R-->>G: rascunho
+    G->>G: ancorar (dados do estado; só o que tem lastro; "não informado")
+    G->>DB: nova versão
+    G->>CRM: cria/atualiza lead + anexa resumo
+    G->>G: evento ResumoHandoffGerado
 ```
 
 ## 7. Mensagens do lead → turno → resposta da Lia (assíncrono, [ADR 006](adr/006-processamento-assincrono-debounce.md))
