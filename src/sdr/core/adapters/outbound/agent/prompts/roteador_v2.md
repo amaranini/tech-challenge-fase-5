@@ -39,3 +39,7 @@ mesmo depois de uma oferta, são false.
 Fora do alcance — diga em "fora_do_alcance" (true/false) se, na ÚLTIMA fala, o lead pede algo
 que uma assistente de chat não entrega: enviar ou mostrar foto, vídeo, planta, arquivo,
 documento ou link; ligar; resolver algo que só se resolve pessoalmente.
+
+Opt-out — diga em "opt_out" (true/false) se, na ÚLTIMA fala, o lead pede para parar de receber
+mensagens ou diz que não tem mais interesse ("não tenho mais interesse", "pare de mandar",
+"não quero mais", "me tira da lista"). Recusar uma opção específica ("esse não") é false.

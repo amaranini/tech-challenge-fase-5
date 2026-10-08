@@ -138,6 +138,7 @@ def _lead(m: LeadModel) -> Lead:
         nome=m.nome,
         agenda=negociacao_de_json(m.agenda),
         atendimento=_atendimento(m),
+        opt_out_em=m.opt_out_em,
     )
 
 
@@ -224,6 +225,14 @@ class LeadRepositorySql:
         async with self._sessoes() as sessao:
             linhas = (await sessao.execute(stmt)).all()
         return [ResumoLead(_lead(m), total, ultima_em) for m, total, ultima_em in linhas]
+
+    async def registrar_opt_out(self, lead_id: UUID, momento: datetime) -> None:
+        async with self._sessoes.begin() as sessao:
+            await sessao.execute(
+                update(LeadModel)
+                .where(LeadModel.id == lead_id, LeadModel.opt_out_em.is_(None))
+                .values(opt_out_em=momento, atualizado_em=func.now())
+            )
 
     async def salvar_atendimento(
         self, atendimento: Atendimento, esperado: EstadoAtendimento

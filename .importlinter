@@ -10,7 +10,7 @@ include_external_packages = True
 name = Camadas globais (core <- verticals <- bootstrap <- main/cli)
 type = layers
 layers =
-    sdr.main | sdr.cli
+    sdr.main | sdr.cli | sdr.worker
     sdr.bootstrap
     sdr.verticals | sdr.config
     sdr.core
@@ -39,12 +39,13 @@ layers =
 
 # 4. Hexágono de cada fatia da vertical + pack no topo da vertical.
 [importlinter:contract:camadas-vertical-imobiliario]
-name = Vertical imobiliária (pack <- agenda <- config | catalogo | persona | qualificacao | resumo)
+name = Vertical imobiliária (pack <- followup <- agenda <- config | catalogo | persona | qualificacao | resumo)
 type = layers
 containers =
     sdr.verticals.imobiliario
 layers =
     pack
+    followup
     agenda
     config | catalogo | persona | qualificacao | resumo
 
@@ -88,6 +89,7 @@ source_modules =
     sdr.verticals.imobiliario.qualificacao.domain
     sdr.verticals.imobiliario.agenda.domain
     sdr.verticals.imobiliario.resumo
+    sdr.verticals.imobiliario.followup
 forbidden_modules =
     fastapi
     starlette

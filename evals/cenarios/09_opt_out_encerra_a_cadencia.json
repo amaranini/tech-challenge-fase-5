@@ -1,0 +1,35 @@
+{
+  "nome": "opt_out_encerra_a_cadencia",
+  "descricao": "O lead recebe um follow-up e pede para parar: a Lia confirma com educação, a cadência acaba (LeadOptOut) e nenhuma mensagem ativa sai mais.",
+  "falas": [
+    "Quero alugar um apartamento no centro",
+    {
+      "acao": "simular_inatividade"
+    },
+    {
+      "texto": "Não tenho mais interesse, pode parar de mandar mensagem",
+      "esperado": {
+        "eventos": [
+          {
+            "tipo": "LeadOptOut"
+          }
+        ]
+      }
+    },
+    {
+      "acao": "simular_inatividade",
+      "espera": "recusa"
+    }
+  ],
+  "esperado": {
+    "eventos": [
+      {
+        "tipo": "LeadOptOut"
+      }
+    ],
+    "contagem_eventos": {
+      "FollowUpEnviado": 1,
+      "LeadOptOut": 1
+    }
+  }
+}

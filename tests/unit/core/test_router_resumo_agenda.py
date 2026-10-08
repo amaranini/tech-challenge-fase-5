@@ -92,7 +92,9 @@ async def test_detalhe_do_lead_traz_o_agendamento_ativo() -> None:
     agenda = AgendaFake([SOL], [])
     ativo = agendamento(lead, 2, StatusAgendamento.ATIVO)
     agenda.agendamentos[ativo.id] = ativo
-    obter = ObterLead(leads, LeadEventoRepositoryFake(), (), agenda, RelogioFake(AGORA))
+    obter = ObterLead(
+        leads, LeadEventoRepositoryFake(), (), agenda=agenda, relogio=RelogioFake(AGORA)
+    )
 
     async with cliente(obter_lead=lambda: obter) as http:
         corpo = (await http.get("/leads/lead-agenda")).json()

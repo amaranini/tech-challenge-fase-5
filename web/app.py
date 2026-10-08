@@ -142,6 +142,21 @@ EVENTOS_POS_QUALIFICACAO: dict[str, Any] = {
     "RetornoIASolicitado": lambda p: "❓ quer voltar para a Lia",
     "RetornoIAConfirmado": lambda p: "🤖 **saiu da fila** e voltou para a Lia",
     "MensagemDuranteEspera": lambda p: "💬 escreveu enquanto aguardava na fila",
+    "HandoffSLAExcedido": lambda p: (
+        f"🚨 **SLA da fila estourado** ({p.get('espera_util_minutos')} min úteis)"
+    ),
+    "FollowUpAgendado": lambda p: (
+        f"⏰ follow-up {p.get('etapa')} agendado para {formatar_horario(p.get('executar_em'))}"
+    ),
+    "FollowUpEnviado": lambda p: (
+        f"📨 **follow-up enviado** ({p.get('tipo')}"
+        + (f", etapa {p.get('etapa')}" if p.get("etapa") else "")
+        + (", requer template" if p.get("requer_template") else "")
+        + ")"
+    ),
+    "LeadEncerradoPorInatividade": lambda p: "💤 cadência encerrada por inatividade",
+    "LeadReengajado": lambda p: f"🔁 **reengajou** (respondeu ao follow-up {p.get('etapa')})",
+    "LeadOptOut": lambda p: "🛑 **opt-out**: pediu para não receber mais mensagens",
 }
 
 
@@ -211,6 +226,26 @@ def mostrar_atendimento(atendimento: dict[str, Any]) -> None:
     if atendimento["na_fila_desde"] and atendimento["estado"] != "atendimento_humano":
         situacao += f" · desde {formatar_horario(atendimento['na_fila_desde'])}"
     st.markdown(md(f"**Atendimento:** {situacao}"))
+
+
+def mostrar_followup(lead: dict[str, Any]) -> None:
+    """Próximo follow-up + botão de demo que "faz o lead sumir" (o worker envia já)."""
+    if lead.get("opt_out_em"):
+        st.caption("🛑 Opt-out: sem mensagens ativas para este lead")
+        return
+    proximos = [f for f in lead.get("followups", []) if f["tipo"] == "retomada"]
+    texto = (
+        f"⏰ Próximo follow-up: etapa {proximos[0]['etapa']} em "
+        f"{formatar_horario(proximos[0]['executar_em'])}"
+        if proximos
+        else "⏰ Sem follow-up programado"
+    )
+    colunas = st.columns([3, 2])
+    colunas[0].caption(texto)
+    if colunas[1].button("⏩ Simular inatividade", key="simular_inatividade") and (
+        falha := api_post(f"/demo/leads/{lead['lead_id']}/simular-inatividade")
+    ):
+        st.error(falha)
 
 
 def mostrar_score(lead: dict[str, Any]) -> None:
@@ -468,12 +503,13 @@ def painel(lead_id: str) -> None:
 
     if acao := lead["proxima_acao"]:
         st.success(f"**Próxima ação:** {ACOES.get(acao, acao)}")
-    if agendamento := lead.get("agendamento"):
-        st.info(md(f"📅 {descrever_agendamento(agendamento)}"))
-    if lead["proxima_acao"] or agendamento:
-        mostrar_resumo(lead_id)
     elif intencao:
         st.caption("Próxima ação: definida quando os dados essenciais estiverem na ficha")
+    if agendamento := lead.get("agendamento"):
+        st.info(md(f"📅 {descrever_agendamento(agendamento)}"))
+    if acao or agendamento:
+        mostrar_resumo(lead_id)
+    mostrar_followup(lead)
 
     if intencao:
         st.markdown(f"**Ficha de {intencao}**")

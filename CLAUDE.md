@@ -1,6 +1,6 @@
 # CLAUDE.md — Agente SDR Conversacional (vertical ativa: imobiliário)
 
-## Fase atual: Dia 3 — Etapa C (Atendimento humano) — entregue, aguardando aceite da PO
+## Fase atual: Dia 3 — concluído (tag `dia-3`); próximo: Dia 4
 
 Ao fim de CADA etapa: parar, listar como verificar o critério de aceite e esperar o ok da PO.
 Commits só com ok da PO, um por etapa, na branch `dia-3` (nunca direto na `main`); ao fim
@@ -69,7 +69,9 @@ src/sdr/
                            resumo.py (TemplateResumo, FatosResumo, Resumo versionado e a
                            ancoragem: dados do estado, itens citados, evidência literal),
                            atendimento.py (máquina de estados IA × humano com tabela de
-                           transições, AcaoAtendimento do turno, HorarioAtendimento)
+                           transições, AcaoAtendimento do turno, HorarioAtendimento),
+                           followup.py (cadência, elegibilidade, janela de 24h, SLA em
+                           tempo útil)
     application/
       ports/               Protocols: CatalogoPort, EmbeddingPort, VerificadorSaudePort, LLMPort
                            (texto + saída estruturada), AgenteConversacionalPort, Ferramenta,
@@ -90,7 +92,9 @@ src/sdr/
                            ObterResumo, ListarAgendamentos, atendimento.py (SolicitarHandoff,
                            ConfirmarHandoff, SolicitarRetornoIA, ConfirmarRetornoIA,
                            AssumirAtendimento, DevolverAtendimento, EnviarMensagemResponsavel,
-                           ListarAtendimentos; compare-and-set no estado)
+                           ListarAtendimentos; compare-and-set no estado), followup.py
+                           (ProgramarFollowUps — na conversa e assinando eventos;
+                           ExecutarFollowUps — chamado pelo worker)
       dto/                 MensagemRecebida normalizada e agnóstica de canal
                            (canal, remetente_id, texto, timestamp, metadados)
     adapters/              infraestrutura GENÉRICA, reaproveitada por qualquer vertical
@@ -106,6 +110,7 @@ src/sdr/
       outbound/persistence/  + resumos_sql.py (resumos_handoff) e crm_postgres.py (CRM mock:
                              crm_registros + log JSON Lines em CRM_MOCK_LOG)
       outbound/eventos/      PublicadorEventosAsyncio (por lead, em ordem; produção: outbox+fila)
+      outbound/persistence/  + followups_sql.py (fila followups_agendados, SKIP LOCKED)
       outbound/relogio.py    RelogioSistema (RelogioPort)
       outbound/turnos/       AgendadorDebounce (asyncio in-process; produção: fila/Redis)
       outbound/canais/       CanalWeb (resposta já persistida; front faz polling)
@@ -135,6 +140,8 @@ src/sdr/
                            visita_imovel presencial; investimento → reuniao_especialista
                            online|escritorio; leitura dos responsáveis)
       resumo/template.py   TEMPLATE_RESUMO (seções do resumo para o corretor; puro)
+      followup/cadencia.py CADENCIAS por situação (D+1, D+3, encerramento D+7) e
+                           ConsultaFollowUpImobiliaria (ficha → busca de imóvel novo)
       catalogo/            fatia "catálogo", hexagonal:
         domain/            Imovel, CriteriosBusca, ImovelEncontrado
         application/       ports (ImovelRepository, IndiceImoveisPort, InterpretadorConsultaPort)
@@ -157,7 +164,8 @@ src/sdr/
 web/                       Streamlit: chat + painel (qualificação, atendimento, agendamento,
                            resumo) + tela "Fila" da equipe (assumir, responder, devolver) —
                            SOMENTE via API HTTP
-worker/                    (Dia 3) processo separado para follow-up
+worker                     `python -m sdr.worker` (src/sdr/worker.py): só o laço de
+                           ExecutarFollowUps; serviço `worker` no compose (mesma imagem)
 migrations/                Alembic — histórico ÚNICO para core + verticais
 tests/apoio/               fakes dos ports e fábricas (core e por vertical); api_viva.py
                            (postar/aguardar_resposta/obter_lead contra a API no ar);
@@ -181,8 +189,9 @@ docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
   - `VerticalPack` cresce só quando um campo é USADO (YAGNI). Hoje: catálogo, rotas, carga
     inicial, persona, ferramentas, intenções (schema, prioridade de campos, prompt do
     especialista, próxima ação), regras de qualificação e prompt de descoberta. Depois:
-    agenda (regra_atribuicao, tipos_agendamento, responsaveis_iniciais) e template_resumo.
-    Depois: cadência de follow-up. Sem segunda vertical e sem motor de configuração genérico.
+    agenda (regra_atribuicao, tipos_agendamento, responsaveis_iniciais), template_resumo e
+    follow-up (cadencias_followup — objetivo + template por etapa; lembrete_agendamento;
+    consulta_followup). O core não tem texto de mensagem comercial: só as regras gerais. Sem segunda vertical e sem motor de configuração genérico.
   - **Ficha de qualificação:** uma por intenção, em **JSONB** (`{"compra": {...}}`), validada
     campo a campo pelo schema da vertical (Protocol `SchemaFicha`; Pydantic só na vertical).
     Intenção "indefinida" é do core; a vertical nunca a declara.
@@ -225,6 +234,12 @@ docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
     alguém mandar". O que a base não tem é declarado na persona da vertical.
   - Roteador: `quer_agendar` (abre a agenda mesmo antes de qualificar) e `fora_do_alcance`
     (tira o "próximo dado" do bloco do especialista nesse turno).
+- **Follow-up (ADR 011)**
+  - Fila `followups_agendados` com SKIP LOCKED; o worker só chama `ExecutarFollowUps`.
+  - Cada resposta do assistente recomeça a cadência; mensagem do lead cancela pendentes
+    (e gera LeadReengajado se respondia a um follow-up); opt-out encerra tudo.
+  - Elegibilidade e SLA (tempo útil) no domínio; cadência e "item novo" na vertical.
+  - Fora da janela de 24h: `requer_template` + `enviar_template`.
 - **Qualificação (ADR 005)**
   - Regras universais (troca de intenção, merge, faltantes, eventos) no agregado
     `Qualificacao` do domínio; nós do grafo só orquestram. Scoring/critério são da vertical.
@@ -240,13 +255,13 @@ docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
 
 ### Contratos do import-linter
 
-1. Camadas globais: `(main | cli) > bootstrap > (verticals | config) > core`.
+1. Camadas globais: `(main | cli | worker) > bootstrap > (verticals | config) > core`.
 2. `sdr.core` não importa `sdr.verticals`.
 3. Hexágono do core: `vertical > adapters > application > domain` (container `sdr.core`).
-4. Vertical imobiliária: `pack > agenda > (config | catalogo | persona | qualificacao | resumo)`;
+4. Vertical imobiliária: `pack > followup > agenda > (config | catalogo | persona | qualificacao | resumo)`;
    fatias hexagonais: `catalogo` (`adapters > application > domain`), `qualificacao` e
    `agenda` (`adapters > domain`).
-5. Núcleos puros (domain/application do core, catalogo, qualificacao.domain, agenda.domain e resumo) não importam fastapi, starlette,
+5. Núcleos puros (domain/application do core, catalogo, qualificacao.domain, agenda.domain, resumo e followup) não importam fastapi, starlette,
    pydantic, pydantic_settings, sqlalchemy, psycopg, alembic, streamlit, httpx, uvicorn,
    fastembed, onnxruntime, numpy, pgvector, openai, langgraph, langchain_core (adicionar
    twilio etc. quando entrarem como dependência).
@@ -259,7 +274,8 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
 
 - uv (Python 3.12), ruff (lint + format), mypy strict, pytest (+ pytest-asyncio), import-linter.
 - `make check` — ruff + format check + mypy + lint-imports + pytest.
-- `docker compose up -d --build --wait` — db (pgvector, host:5433), api (:8000), web (:8501).
+- `docker compose up -d --build --wait` — db (pgvector, host:5433), api (:8000), web (:8501),
+  worker (follow-up; `docker compose logs -f worker`).
   A API roda `alembic upgrade head` no start.
 - `make seed` (= `python -m sdr.cli seed`) — carrega o catálogo inicial da vertical ativa +
   embeddings e a agenda mock (responsáveis + grade dos próximos dias úteis; idempotente).
@@ -269,6 +285,9 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
   slots de 60 min; ~1 em 4 já ocupado por "outros compromissos").
 - `make busca q="apê 2 quartos zona sul até 800 mil perto do metrô"` — testa POST /imoveis/busca.
 - Debounce: `DEBOUNCE_SEGUNDOS` (5) e `DEBOUNCE_MAX_SEGUNDOS` (20).
+- Follow-up: `FOLLOWUP_UNIDADE=dias|minutos` (demo), `FOLLOWUP_RESPEITAR_HORARIO`,
+  `HANDOFF_SLA_MINUTOS` (15), `FOLLOWUP_LEMBRETE_HORAS` (24), `JANELA_CONVERSA_HORAS` (24).
+  Demo: `POST /demo/leads/{id}/simular-inatividade` ou botão "⏩ Simular inatividade".
 - LLM por nó: `LLM_MODEL_ROUTER`, `LLM_MODEL_EXTRACTION`, `LLM_MODEL_AGENT` (vazio = `LLM_MODELO`);
   `ROUTER_CONFIANCA_MIN` (0.6) para trocar de intenção.
 - `make e2e` — aceite da Etapa C (Dia 1) com LLM real contra a API no ar (custa tokens; precisa
@@ -320,7 +339,7 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
   - Etapa A — Agendamento (AgendaPort mock, nó de agendamento, eventos) — ADR 007
   - Etapa B — Resumo de handoff (fora do turno, ancorado) + CRMPort mock + painel — ADR 008
   - Etapa C — Máquina de estados de atendimento (handoff para humano) + tela Fila — ADR 009
-  - Etapa D — Worker de follow-up (SKIP LOCKED, cadência da vertical, opt-out, SLA)
+  - Etapa D — Worker de follow-up (SKIP LOCKED, cadência da vertical, opt-out, SLA) — ADR 011
 - **Dia 4** — Dashboard + WhatsApp (Twilio Sandbox) + observabilidade Langfuse
 - **Dia 5** — Deploy cloud + guardrails/mascaramento de PII + eval + README e docs finais
 

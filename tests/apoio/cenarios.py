@@ -12,6 +12,8 @@ Formato de um roteiro:
       # passos da equipe (tela Fila), via API:
       #   {"acao": "assumir", "responsavel": "Rafael"} | {"acao": "responder", "texto": "..."}
       #   | {"acao": "devolver"}
+      #   | {"acao": "simular_inatividade"} (demo: o worker manda o próximo follow-up já)
+      #   | {"acao": "simular_inatividade", "espera": "recusa"} (opt-out)
       "esperado": {
         "intencao": "compra",                           # igualdade
         "atendimento_estado": "aguardando_humano",      # estado de atendimento (IA × humano)

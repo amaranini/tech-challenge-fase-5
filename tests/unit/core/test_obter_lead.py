@@ -130,6 +130,8 @@ async def test_get_lead_expoe_qualificacao_completa_e_eventos_em_ordem() -> None
             "motivo": None,
             "responsavel": None,
         },
+        "opt_out_em": None,
+        "followups": [],
     }
     assert corpo["qualificado_em"] is not None
     assert [(e["tipo"], e["payload"]) for e in corpo["eventos"]] == [

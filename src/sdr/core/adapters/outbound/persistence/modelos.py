@@ -43,6 +43,7 @@ class LeadModel(Base):
     atendimento_estado: Mapped[str] = mapped_column(String(30), server_default="atendimento_ia")
     na_fila_desde: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     atendimento: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
+    opt_out_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     atualizado_em: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -197,3 +198,33 @@ class CrmRegistroModel(Base):
     resumo: Mapped[dict[str, Any]] = mapped_column(JSONB)
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     atualizado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+# ---------------------------------------------------------------------- follow-up
+
+
+class FollowUpModel(Base):
+    """Fila de follow-ups (retomadas, lembretes, SLA da fila), consumida com SKIP LOCKED."""
+
+    __tablename__ = "followups_agendados"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    lead_id: Mapped[UUID] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"))
+    tipo: Mapped[str] = mapped_column(String(30))
+    etapa: Mapped[int] = mapped_column(Integer, server_default="1")
+    situacao: Mapped[str | None] = mapped_column(String(30))
+    executar_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(20))
+    motivo: Mapped[str | None] = mapped_column(String(100))
+    referencia: Mapped[str | None] = mapped_column(String(100))
+    ignorar_horario: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    reservado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    atualizado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_followups_fila", "status", "executar_em"),
+        Index("ix_followups_lead", "lead_id", "status"),
+    )

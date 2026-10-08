@@ -22,5 +22,6 @@ def criar_dependencias(**fabricas: Any) -> Dependencias:
         "assumir_atendimento": _nao_usado,
         "devolver_atendimento": _nao_usado,
         "enviar_mensagem_responsavel": _nao_usado,
+        "programar_followups": _nao_usado,
     }
     return Dependencias(**(padrao | fabricas))

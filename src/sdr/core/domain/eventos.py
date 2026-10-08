@@ -28,6 +28,12 @@ class TipoEvento(StrEnum):
     RETORNO_IA_SOLICITADO = "RetornoIASolicitado"
     RETORNO_IA_CONFIRMADO = "RetornoIAConfirmado"
     MENSAGEM_NA_ESPERA = "MensagemDuranteEspera"
+    HANDOFF_SLA_EXCEDIDO = "HandoffSLAExcedido"
+    FOLLOWUP_AGENDADO = "FollowUpAgendado"
+    FOLLOWUP_ENVIADO = "FollowUpEnviado"
+    LEAD_ENCERRADO_INATIVIDADE = "LeadEncerradoPorInatividade"
+    LEAD_REENGAJADO = "LeadReengajado"
+    LEAD_OPT_OUT = "LeadOptOut"
 
 
 @dataclass(frozen=True)

@@ -37,6 +37,10 @@ class LeadRepository(Protocol):
         no atendimento."""
         ...
 
+    async def registrar_opt_out(self, lead_id: UUID, momento: datetime) -> None:
+        """Lead pediu para não receber mais mensagens ativas (`salvar` não mexe nisso)."""
+        ...
+
     async def listar_por_atendimento(
         self, estados: Sequence[EstadoAtendimento], limite: int = 100
     ) -> list[Lead]:

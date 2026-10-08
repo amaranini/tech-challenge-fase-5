@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 from sdr.core.application.use_cases.atendimento import (
     AssumirAtendimento,
@@ -14,6 +14,7 @@ from sdr.core.application.use_cases.consultar_agenda_e_resumo import (
     ObterResumo,
 )
 from sdr.core.application.use_cases.consultar_conversas import ListarLeads, ObterHistorico
+from sdr.core.application.use_cases.followup import ProgramarFollowUps
 from sdr.core.application.use_cases.obter_lead import ObterLead
 from sdr.core.application.use_cases.receber_mensagem import ReceberMensagem
 from sdr.core.application.use_cases.verificar_saude import VerificarSaude
@@ -37,6 +38,7 @@ class Dependencias:
     assumir_atendimento: Callable[[], AssumirAtendimento]
     devolver_atendimento: Callable[[], DevolverAtendimento]
     enviar_mensagem_responsavel: Callable[[], EnviarMensagemResponsavel]
+    programar_followups: Callable[[], ProgramarFollowUps | None]
 
 
 def obter_dependencias(request: Request) -> Dependencias:
@@ -86,3 +88,10 @@ def obter_devolver_atendimento(request: Request) -> DevolverAtendimento:
 
 def obter_enviar_mensagem_responsavel(request: Request) -> EnviarMensagemResponsavel:
     return obter_dependencias(request).enviar_mensagem_responsavel()
+
+
+def obter_programar_followups(request: Request) -> ProgramarFollowUps:
+    programar = obter_dependencias(request).programar_followups()
+    if programar is None:
+        raise HTTPException(404, "follow-up não configurado para a vertical ativa")
+    return programar

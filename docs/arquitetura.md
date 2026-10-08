@@ -19,7 +19,9 @@ Este documento descreve como o sistema é organizado. Ele se apoia em três deci
 - **atendimento humano (máquina de estados, gate no grafo, compare-and-set):**
   [ADR 009](adr/009-atendimento-humano-handoff.md);
 - **limites do assistente (honestidade + próximo passo real):**
-  [ADR 010](adr/010-limites-do-assistente.md).
+  [ADR 010](adr/010-limites-do-assistente.md);
+- **follow-up automático (fila SKIP LOCKED, worker, cadência da vertical):**
+  [ADR 011](adr/011-followup-worker.md).
 
 ## 1. Contexto
 
@@ -330,6 +332,23 @@ stateDiagram-v2
 O grafo só decide a ação e prevê o estado. O `ProcessarTurno` recheca o estado antes de
 enviar (se um humano assumiu no meio, a resposta é descartada) e aplica a ação com
 compare-and-set.
+
+### Follow-up automático ([ADR 011](adr/011-followup-worker.md))
+
+```mermaid
+flowchart LR
+    PT[ProcessarTurno<br/>respondeu] -- "recomeça a cadência" --> PF[ProgramarFollowUps]
+    RM[ReceberMensagem<br/>lead falou] -- "cancela pendentes<br/>(LeadReengajado)" --> PF
+    EV[eventos<br/>Agendamento* · HandoffConfirmado] -- "lembrete 24h antes<br/>checagem de SLA" --> PF
+    PF --> Q[(followups_agendados)]
+    W[[worker<br/>python -m sdr.worker]] -- "laço" --> EX[ExecutarFollowUps]
+    EX -- "SELECT … FOR UPDATE<br/>SKIP LOCKED" --> Q
+    EX --> EL{elegível?<br/>domínio}
+    EL -- "não" --> C[cancela / adia<br/>com motivo]
+    EL -- "sim" --> R[RedatorMensagemAtiva<br/>LLM + item novo da vertical]
+    R --> CAN[CanalMensagemPort<br/>enviar / enviar_template]
+    EX -- "SLA estourado" --> SLA[HandoffSLAExcedido]
+```
 
 ## 7. Mensagens do lead → turno → resposta da Lia (assíncrono, [ADR 006](adr/006-processamento-assincrono-debounce.md))
 

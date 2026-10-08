@@ -56,6 +56,7 @@ class Lead:
     nome: str | None = None
     agenda: NegociacaoAgenda = field(default_factory=NegociacaoAgenda)
     atendimento: Atendimento | None = None  # None = ATENDIMENTO_IA desde sempre
+    opt_out_em: datetime | None = None  # pediu para não receber mais mensagens ativas
 
     @property
     def atendimento_atual(self) -> Atendimento:

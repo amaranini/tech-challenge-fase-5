@@ -37,6 +37,22 @@ services:
       timeout: 5s
       retries: 20
 
+  worker:
+    # Follow-up automático: mesmo código/imagem da API, só o laço do caso de uso.
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    command: ["python", "-m", "sdr.worker"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-sdr}:${POSTGRES_PASSWORD:-sdr}@db:5432/${POSTGRES_DB:-sdr}
+      EMBEDDING_CACHE_DIR: /models
+    depends_on:
+      api:
+        condition: service_healthy  # a API aplica as migrations
+
   web:
     build:
       context: .

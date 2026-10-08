@@ -57,6 +57,15 @@ class Settings(BaseSettings):
     agenda_mock_hora_fim: int = 20  # último slot termina neste horário
     agenda_mock_duracao_min: int = 60
 
+    # Follow-up (worker): cadência da vertical em dias (produção) ou minutos (demo)
+    followup_unidade: str = "dias"  # dias | minutos
+    followup_respeitar_horario: bool = True  # fora do horário de atendimento, adia
+    followup_intervalo_segundos: float = 5.0  # worker: espera entre varreduras sem trabalho
+    followup_lote: int = 20  # worker: itens por varredura
+    followup_lembrete_horas: float = 24.0  # lembrete do agendamento, tantas horas antes
+    janela_conversa_horas: float = 24.0  # depois disso, mensagem ativa exige template
+    handoff_sla_minutos: int = 15  # espera máxima na fila (tempo útil) antes do alerta
+
     # CRM mock (Postgres + log JSON Lines). Produção: HubSpot ou outro CRM.
     crm_mock_log: str | None = "var/crm_mock.jsonl"
 

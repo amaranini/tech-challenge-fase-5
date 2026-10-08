@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from sdr.core.application.ports.agente import EntradaAgente
 from sdr.core.application.ports.crm import RegistroCRM
+from sdr.core.application.ports.followup import MensagemAtiva, PedidoMensagemAtiva
 from sdr.core.application.ports.llm import (
     ChamadaFerramenta,
     DefinicaoFerramenta,
@@ -38,6 +39,7 @@ from sdr.core.domain.catalogo import (
 )
 from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem, StatusMensagem
 from sdr.core.domain.eventos import EventoLead
+from sdr.core.domain.followup import FollowUp, StatusFollowUp, TipoFollowUp
 from sdr.core.domain.resumo import (
     AfirmacaoChecada,
     FatosResumo,
@@ -174,8 +176,12 @@ class LeadRepositoryFake:
 
     async def salvar(self, lead: Lead) -> None:
         anterior = self.leads.get(lead.id)
-        atendimento = anterior.atendimento if anterior else lead.atendimento
-        self.leads[lead.id] = replace(lead, atendimento=atendimento)
+        if anterior is None:
+            self.leads[lead.id] = lead
+            return
+        self.leads[lead.id] = replace(
+            lead, atendimento=anterior.atendimento, opt_out_em=anterior.opt_out_em
+        )
 
     async def listar(self, canal: Canal | None, limite: int) -> list[ResumoLead]:
         return [ResumoLead(ld, 0, None) for ld in self.leads.values() if canal in (None, ld.canal)]
@@ -188,6 +194,11 @@ class LeadRepositoryFake:
             return False
         self.leads[lead.id] = replace(lead, atendimento=atendimento)
         return True
+
+    async def registrar_opt_out(self, lead_id: UUID, momento: datetime) -> None:
+        lead = self.leads[lead_id]
+        if lead.opt_out_em is None:
+            self.leads[lead_id] = replace(lead, opt_out_em=momento)
 
     async def listar_por_atendimento(
         self, estados: Sequence[EstadoAtendimento], limite: int = 100
@@ -298,6 +309,7 @@ class TravaFake:
 class CanalFake:
     def __init__(self) -> None:
         self.enviadas: list[tuple[Lead, Mensagem]] = []
+        self.templates: list[tuple[Lead, str, dict[str, str]]] = []
 
     async def enviar(self, lead: Lead, mensagem: Mensagem) -> None:
         self.enviadas.append((lead, mensagem))
@@ -305,7 +317,7 @@ class CanalFake:
     async def enviar_template(
         self, lead: Lead, template: str, variaveis: Mapping[str, str]
     ) -> None:
-        raise AssertionError("template não esperado")
+        self.templates.append((lead, template, dict(variaveis)))
 
 
 # ---------------------------------------------------------------- agenda
@@ -528,3 +540,71 @@ class CRMFake:
         criado = lead.id not in self.registros
         self.registros[lead.id] = (lead, resumo, agendamento)
         return RegistroCRM(f"CRM-{lead.id.hex[:4]}", criado, resumo.gerado_em)
+
+
+# ---------------------------------------------------------------- follow-up
+
+
+class FollowUpRepositoryFake:
+    def __init__(self) -> None:
+        self.itens: dict[UUID, FollowUp] = {}
+
+    async def agendar(self, followup: FollowUp) -> None:
+        self.itens[followup.id] = followup
+
+    async def cancelar_pendentes(
+        self, lead_id: UUID, tipos: Sequence[TipoFollowUp], motivo: str
+    ) -> int:
+        alvos = [
+            f
+            for f in self.itens.values()
+            if f.lead_id == lead_id and f.status is StatusFollowUp.PENDENTE and f.tipo in tipos
+        ]
+        for f in alvos:
+            self.itens[f.id] = replace(f, status=StatusFollowUp.CANCELADO, motivo=motivo)
+        return len(alvos)
+
+    async def reservar_vencidos(
+        self, agora: datetime, limite: int, *, travado_ha: float = 600
+    ) -> list[FollowUp]:
+        vencidos = sorted(
+            (
+                f
+                for f in self.itens.values()
+                if f.status is StatusFollowUp.PENDENTE and f.executar_em <= agora
+            ),
+            key=lambda f: f.executar_em,
+        )[:limite]
+        for f in vencidos:
+            self.itens[f.id] = replace(f, status=StatusFollowUp.PROCESSANDO)
+        return vencidos
+
+    async def concluir(self, followup_id: UUID, status: StatusFollowUp, motivo: str | None) -> None:
+        self.itens[followup_id] = replace(self.itens[followup_id], status=status, motivo=motivo)
+
+    async def reagendar(self, followup: FollowUp) -> None:
+        self.itens[followup.id] = replace(followup, status=StatusFollowUp.PENDENTE)
+
+    async def pendentes(self, lead_id: UUID) -> list[FollowUp]:
+        return sorted(
+            (
+                f
+                for f in self.itens.values()
+                if f.lead_id == lead_id and f.status is StatusFollowUp.PENDENTE
+            ),
+            key=lambda f: f.executar_em,
+        )
+
+    def do_lead(self, lead_id: UUID, tipo: TipoFollowUp | None = None) -> list[FollowUp]:
+        return [f for f in self.itens.values() if f.lead_id == lead_id and tipo in (None, f.tipo)]
+
+
+class RedatorMensagemAtivaFake:
+    def __init__(self, *textos: str) -> None:
+        self._textos = list(textos)
+        self.pedidos: list[PedidoMensagemAtiva] = []
+
+    async def redigir(self, pedido: PedidoMensagemAtiva) -> MensagemAtiva:
+        self.pedidos.append(pedido)
+        texto = self._textos.pop(0) if self._textos else "Oi! Tudo bem por aí?"
+        return MensagemAtiva(texto, "fake-1", 10, 10)

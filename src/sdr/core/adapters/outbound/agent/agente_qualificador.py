@@ -106,6 +106,7 @@ PROMPT_CLASSIFICACAO_ATENDIMENTO = (PASTA_PROMPTS / "atendimento_classificacao_v
 )
 PROMPT_ATENDIMENTO = (PASTA_PROMPTS / "atendimento_v1.md").read_text(encoding="utf-8")
 PROMPT_LIMITES = (PASTA_PROMPTS / "limites_v1.md").read_text(encoding="utf-8")
+PROMPT_OPT_OUT = (PASTA_PROMPTS / "opt_out_v1.md").read_text(encoding="utf-8")
 PROMPT_EXTRACAO = (PASTA_PROMPTS / "extracao_v2.md").read_text(encoding="utf-8")
 PROMPT_INTERPRETACAO_AGENDA = (PASTA_PROMPTS / "agenda_interpretacao_v1.md").read_text(
     encoding="utf-8"
@@ -166,6 +167,7 @@ class EstadoGrafo(TypedDict):
     sinal_humano: MotivoHandoff | None
     quer_agendar: bool
     fora_do_alcance: bool
+    opt_out: bool
     acao_atendimento: AcaoAtendimento | None
     atendimento_previsto: Atendimento | None
     silenciar: bool
@@ -278,6 +280,7 @@ class AgenteQualificador:
         grafo.add_node("confirmacao_retorno", self._no_confirmacao_retorno)  # type: ignore[call-overload]
         grafo.add_node("solicitar_handoff", self._no_solicitar_handoff)  # type: ignore[call-overload]
         grafo.add_node("responder_atendimento", self._no_responder_atendimento)  # type: ignore[call-overload]
+        grafo.add_node("opt_out", self._no_opt_out)  # type: ignore[call-overload]
 
         grafo.add_edge(START, "gate")
         por_estado = {
@@ -296,13 +299,16 @@ class AgenteQualificador:
         grafo.add_conditional_edges(
             "roteador",
             lambda e: (
-                "solicitar_handoff"
+                "opt_out"
+                if e["opt_out"]
+                else "solicitar_handoff"
                 if e["sinal_humano"]
                 else "extracao"
                 if e["intencao_atual"]
                 else "descoberta"
             ),
             {
+                "opt_out": "opt_out",
                 "solicitar_handoff": "solicitar_handoff",
                 "extracao": "extracao",
                 "descoberta": "descoberta",
@@ -321,7 +327,13 @@ class AgenteQualificador:
             ),
             {"especialista": "especialista", "responder_agenda": "responder_agenda"},
         )
-        for no in ("especialista", "descoberta", "responder_agenda", "responder_atendimento"):
+        for no in (
+            "especialista",
+            "descoberta",
+            "responder_agenda",
+            "responder_atendimento",
+            "opt_out",
+        ):
             grafo.add_conditional_edges(
                 no, self._apos_resposta, {"ferramentas": "ferramentas", END: END}
             )
@@ -333,6 +345,7 @@ class AgenteQualificador:
                 "descoberta": "descoberta",
                 "responder_agenda": "responder_agenda",
                 "responder_atendimento": "responder_atendimento",
+                "opt_out": "opt_out",
             },
         )
         return grafo.compile()
@@ -367,6 +380,7 @@ class AgenteQualificador:
             "sinal_humano": None,
             "quer_agendar": False,
             "fora_do_alcance": False,
+            "opt_out": False,
             "acao_atendimento": None,
             "atendimento_previsto": None,
             "silenciar": False,
@@ -416,6 +430,7 @@ class AgenteQualificador:
             campos_faltantes=tuple(final["campos_faltantes"]),
             agenda=final["negociacao"],
             acao_atendimento=final["acao_atendimento"],
+            opt_out=final["opt_out"],
             metadados=metadados,
         )
 
@@ -434,6 +449,7 @@ class AgenteQualificador:
                 "atendimento_humano": {"type": "string", "enum": SINAIS_HUMANO},
                 "quer_agendar": {"type": "boolean"},
                 "fora_do_alcance": {"type": "boolean"},
+                "opt_out": {"type": "boolean"},
             },
             "required": [
                 "intencao",
@@ -441,6 +457,7 @@ class AgenteQualificador:
                 "atendimento_humano",
                 "quer_agendar",
                 "fora_do_alcance",
+                "opt_out",
             ],
             "additionalProperties": False,
         }
@@ -482,12 +499,14 @@ class AgenteQualificador:
             "sinal_humano": ler_sinal_humano(resposta.dados.get("atendimento_humano", SEM_HANDOFF)),
             "quer_agendar": resposta.dados.get("quer_agendar") is True,
             "fora_do_alcance": resposta.dados.get("fora_do_alcance") is True,
+            "opt_out": resposta.dados.get("opt_out") is True,
             "roteamento": {
                 "classificada": classificada,
                 "confianca": confianca,
                 "atendimento_humano": resposta.dados.get("atendimento_humano"),
                 "quer_agendar": resposta.dados.get("quer_agendar"),
                 "fora_do_alcance": resposta.dados.get("fora_do_alcance"),
+                "opt_out": resposta.dados.get("opt_out"),
                 "modelo": resposta.modelo,
             },
             "tokens_entrada": resposta.tokens_entrada,
@@ -666,6 +685,13 @@ class AgenteQualificador:
             )
             novas = self._contexto(estado, PROMPT_ATENDIMENTO, bloco)
         return await self._chamar_agente(estado, novas, "responder_atendimento")
+
+    async def _no_opt_out(self, estado: EstadoGrafo) -> dict[str, object]:
+        """O lead pediu para parar: confirma com educação (o turno encerra a cadência)."""
+        novas: list[MensagemLLM] = []
+        if not estado["mensagens"]:
+            novas = self._contexto(estado, PROMPT_OPT_OUT, None)
+        return await self._chamar_agente(estado, novas, "opt_out")
 
     # ------------------------------------------------------------------ agenda
     def _apos_scoring(self, estado: EstadoGrafo) -> str:

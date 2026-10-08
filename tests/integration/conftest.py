@@ -61,7 +61,8 @@ async def sessoes(url_banco_teste: str) -> AsyncIterator[async_sessionmaker[Asyn
         await conn.execute(
             text(
                 "TRUNCATE imoveis, leads, conversas, mensagens, lead_eventos, agendamentos, "
-                "slots_agenda, responsaveis, resumos_handoff, crm_registros CASCADE"
+                "slots_agenda, responsaveis, resumos_handoff, crm_registros, "
+                "followups_agendados CASCADE"
             )
         )
     yield criar_fabrica_sessao(engine)

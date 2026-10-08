@@ -206,6 +206,7 @@ async def test_roteador_com_saida_invalida_e_tratado_como_indefinida() -> None:
         "atendimento_humano": None,
         "quer_agendar": None,
         "fora_do_alcance": None,
+        "opt_out": None,
         "modelo": "fake-1",
     }
 

@@ -1,0 +1,52 @@
+{
+  "nome": "followup_inatividade_e_reengajamento",
+  "descricao": "Exemplo 3: o lead para de responder; 'simular inatividade' faz o worker mandar um follow-up contextual (retoma a busca dele); o lead responde e a conversa segue do ponto certo, com a ficha preservada.",
+  "falas": [
+    "Quero comprar um apartamento de 2 quartos na zona sul, até 800 mil",
+    {
+      "acao": "simular_inatividade"
+    },
+    {
+      "texto": "Oi, desculpa a demora! Ainda estou procurando sim",
+      "esperado": {
+        "eventos": [
+          {
+            "tipo": "LeadReengajado",
+            "payload": {
+              "etapa": 1
+            }
+          }
+        ],
+        "intencao": "compra",
+        "ficha": {
+          "regiao": {
+            "contem": "sul"
+          },
+          "preco_max": 800000,
+          "quartos": 2
+        }
+      }
+    }
+  ],
+  "esperado": {
+    "intencao": "compra",
+    "eventos": [
+      {
+        "tipo": "FollowUpAgendado"
+      },
+      {
+        "tipo": "FollowUpEnviado",
+        "payload": {
+          "tipo": "retomada",
+          "etapa": 1
+        }
+      },
+      {
+        "tipo": "LeadReengajado"
+      }
+    ],
+    "contagem_eventos": {
+      "FollowUpEnviado": 1
+    }
+  }
+}

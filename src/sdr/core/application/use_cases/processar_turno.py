@@ -10,7 +10,8 @@
    handoff, confirmar, voltar para a IA...) é aplicada com compare-and-set.
 6. Persiste a resposta, marca o lote como PROCESSADO, grava qualificação, negociação de
    agenda e eventos, e entrega pelo CanalMensagemPort do canal do lead.
-7. Publica os eventos do turno para as reações fora da conversa (PublicadorEventosPort).
+7. Reprograma o follow-up (a cadência conta desta resposta) ou o encerra no opt-out.
+8. Publica os eventos do turno para as reações fora da conversa (PublicadorEventosPort).
 """
 
 import logging
@@ -32,6 +33,7 @@ from sdr.core.application.use_cases.atendimento import (
     AplicarAcaoAtendimento,
     AtendimentoAlteradoError,
 )
+from sdr.core.application.use_cases.followup import ProgramarFollowUps
 from sdr.core.domain.agente import Persona, RespostaAgente
 from sdr.core.domain.catalogo import ItemCatalogo
 from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem, Papel, StatusMensagem
@@ -71,7 +73,9 @@ class ProcessarTurno:
         max_reprocessamentos: int = MAX_REPROCESSAMENTOS,
         publicador: PublicadorEventosPort | None = None,
         atendimento: AplicarAcaoAtendimento | None = None,
+        followups: ProgramarFollowUps | None = None,
     ) -> None:
+        self._followups = followups
         self._publicador = publicador
         self._atendimento = atendimento
         self._leads = leads
@@ -173,7 +177,7 @@ class ProcessarTurno:
         await self._conversas.salvar(conversa)
 
         atualizado = await self._leads.obter(lead.id) or lead  # atendimento recém-gravado
-        lead = replace(lead, atendimento=atualizado.atendimento)
+        lead = replace(lead, atendimento=atualizado.atendimento, opt_out_em=atualizado.opt_out_em)
         atualizado = lead
         if resposta.qualificacao is not None:
             atualizado = replace(atualizado, qualificacao=resposta.qualificacao)
@@ -189,6 +193,12 @@ class ProcessarTurno:
             logger.error("Sem CanalMensagemPort para o canal %s", lead.canal)
         else:
             await canal.enviar(lead, enviada)
+        # Follow-up: a cadência recomeça desta resposta (ou acaba, se o lead pediu para parar).
+        if self._followups is not None:
+            if resposta.opt_out:
+                await self._followups.registrar_opt_out(lead, "\n".join(m.texto for m in lote))
+            else:
+                await self._followups.apos_resposta(lead)
         # Reações aos eventos (ex.: resumo para o responsável) rodam fora do turno.
         if self._publicador is not None and resposta.eventos:
             self._publicador.publicar(resposta.eventos)

@@ -51,6 +51,12 @@ class EventoResposta(BaseModel):
         )
 
 
+class FollowUpPendente(BaseModel):
+    tipo: str
+    etapa: int
+    executar_em: datetime
+
+
 class LeadDetalhe(BaseModel):
     lead_id: str
     canal: Canal
@@ -74,6 +80,12 @@ class LeadDetalhe(BaseModel):
         default=None, description="Agendamento ativo e ainda por acontecer"
     )
     atendimento: AtendimentoResposta = Field(description="IA × humano (fila, quem atende)")
+    opt_out_em: datetime | None = Field(
+        default=None, description="Pediu para não receber mais mensagens ativas"
+    )
+    followups: list[FollowUpPendente] = Field(
+        default_factory=list, description="Follow-ups programados (retomada, lembrete, SLA)"
+    )
 
     @classmethod
     def de_estado(cls, estado: EstadoLead) -> "LeadDetalhe":
@@ -99,6 +111,11 @@ class LeadDetalhe(BaseModel):
                 else None
             ),
             atendimento=AtendimentoResposta.de_dominio(lead.atendimento_atual),
+            opt_out_em=lead.opt_out_em,
+            followups=[
+                FollowUpPendente(tipo=f.tipo.value, etapa=f.etapa, executar_em=f.executar_em)
+                for f in estado.followups
+            ],
         )
 
 

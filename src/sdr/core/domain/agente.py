@@ -55,6 +55,7 @@ class RespostaAgente:
     agenda: NegociacaoAgenda | None = None  # negociação de horário (None = inalterada)
     acao_atendimento: AcaoAtendimento | None = None  # aplicada pelo turno (compare-and-set)
     silenciar: bool = False  # atendimento humano em curso: a IA não responde
+    opt_out: bool = False  # lead pediu para parar: encerrar a cadência de follow-up
     metadados: dict[str, object] = field(default_factory=dict)
 
 
