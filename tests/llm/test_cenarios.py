@@ -55,8 +55,6 @@ def _resumo(estado: dict[str, Any]) -> str:
 
 def _conferir_painel(lead_id: str, estado: dict[str, Any]) -> None:
     """O painel ao lado do chat mostra intenção, score, ficha e próxima ação do lead."""
-    if estado.get("agendamento"):
-        aguardar_resumo(lead_id, None)  # gerado fora do turno: o painel só mostra depois
     app = AppTest.from_file(str(APP_WEB), default_timeout=30)
     app.session_state["lead_id"] = lead_id
     app.run()
@@ -70,7 +68,21 @@ def _conferir_painel(lead_id: str, estado: dict[str, Any]) -> None:
         assert painel.success, "o painel deveria destacar a próxima ação"
     if estado.get("agendamento"):
         assert painel.info, "o painel deveria mostrar o agendamento"
-        assert any("Resumo do lead" in e.label for e in painel.expander), "falta o resumo"
+
+
+def _conferir_resumo_na_fila(lead_id: str) -> None:
+    """Quem atende vê o resumo na tela Fila, junto da conversa do lead."""
+    aguardar_resumo(lead_id, None)  # gerado fora do turno
+    app = AppTest.from_file(str(APP_WEB), default_timeout=30)
+    app.session_state["tela"] = "fila"
+    app.session_state["responsavel_nome"] = "Teste"
+    app.run()
+    assert not app.exception, [e.value for e in app.exception]
+    [bloco] = [e for e in app.expander if e.label.startswith(f"{lead_id} — com")]
+    textos = "\n".join(m.value for m in bloco.markdown)
+    assert "Resumo do lead para o corretor" in textos, "o resumo não aparece na Fila"
+    assert "Necessidades (ficha)" in textos
+    print("[fila]   resumo visível para quem atende")
 
 
 @pytest.mark.parametrize("cenario", CENARIOS, ids=[c.nome for c in CENARIOS])
@@ -81,7 +93,10 @@ def test_cenario(cenario: Cenario) -> None:
 
     for numero, fala in enumerate(cenario.falas, start=1):
         if fala.acao is not None:
-            acao_da_equipe(lead_id, fala.acao)
+            if fala.acao["acao"] == "conferir_resumo_na_fila":
+                _conferir_resumo_na_fila(lead_id)
+            else:
+                acao_da_equipe(lead_id, fala.acao)
             continue
         esperado = fala.esperado or {}
         if esperado.get("sem_resposta"):

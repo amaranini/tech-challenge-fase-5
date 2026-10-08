@@ -75,7 +75,9 @@ Três exigências:
    - `GET /leads/{id}/resumo` devolve a última versão (ou `?versao=N`) e a lista de versões;
    - `GET /agendamentos` aceita filtros por status e data;
    - `GET /leads/{id}` passa a trazer o agendamento ativo;
-   - o painel do Streamlit mostra o agendamento e o resumo.
+   - o resumo aparece na tela **Fila** do Streamlit, para quem vai atender: num expander
+     enquanto o lead aguarda e aberto quando o atendimento é assumido. O painel do chat
+     mostra só o agendamento; decisão da PO, porque o resumo é ferramenta da equipe.
 
 ## Consequências
 

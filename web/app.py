@@ -259,19 +259,26 @@ def mostrar_score(lead: dict[str, Any]) -> None:
         st.markdown(md("\n".join(f"- {m}" for m in lead["score_motivos"])) or "—")
 
 
-def mostrar_resumo(lead_id: str) -> None:
+def mostrar_resumo(lead_id: str, *, recolhido: bool) -> None:
+    """Resumo para quem vai atender (tela Fila). `recolhido`: num expander, para ler antes
+    de assumir; senão, num quadro aberto (dentro de outro expander não cabe expander)."""
     try:
         resposta = httpx.get(f"{API_URL}/leads/{lead_id}/resumo", timeout=TIMEOUT)
     except httpx.HTTPError:
         return
     if resposta.status_code == httpx.codes.NOT_FOUND:
-        st.caption("📝 O resumo para o corretor é gerado quando o lead qualifica ou agenda.")
+        st.caption("📝 Resumo ainda não gerado (sai em instantes após o handoff).")
         return
     if resposta.is_error:
         return
     resumo: dict[str, Any] = resposta.json()
-    hora = formatar_horario(resumo["gerado_em"])
-    with st.expander(f"📝 {resumo['titulo']} · v{resumo['versao']} ({hora})"):
+    titulo = (
+        f"📝 {resumo['titulo']} · v{resumo['versao']} ({formatar_horario(resumo['gerado_em'])})"
+    )
+    area = st.expander(titulo) if recolhido else st.container(border=True)
+    with area:
+        if not recolhido:
+            st.markdown(f"**{titulo}**")
         st.caption(f"gerado por {resumo['gatilho']} · também enviado ao CRM")
         for secao in resumo["secoes"]:
             mostrar_secao(secao)
@@ -413,12 +420,14 @@ def fila_e_atendimentos(responsavel: str) -> None:
             falha := api_post(f"/atendimentos/{lead}/assumir", {"responsavel": responsavel})
         ):
             st.error(falha)
+        mostrar_resumo(lead, recolhido=True)
 
     st.subheader(f"🧑‍💼 Em atendimento ({len(em_atendimento)})")
     for item in em_atendimento:
         lead = item["lead_id"]
         quem = item["atendimento"]["responsavel"]
         with st.expander(f"{lead} — com {quem}", expanded=True):
+            mostrar_resumo(lead, recolhido=False)
             for m in api_get(f"/conversas/{lead}/mensagens")["mensagens"][-12:]:
                 autor = {"lead": "🙂 Lead", "assistente": "🏠 Lia"}.get(
                     m["papel"], f"🧑‍💼 {m.get('responsavel') or 'Equipe'}"
@@ -507,8 +516,6 @@ def painel(lead_id: str) -> None:
         st.caption("Próxima ação: definida quando os dados essenciais estiverem na ficha")
     if agendamento := lead.get("agendamento"):
         st.info(md(f"📅 {descrever_agendamento(agendamento)}"))
-    if acao or agendamento:
-        mostrar_resumo(lead_id)
     mostrar_followup(lead)
 
     if intencao:

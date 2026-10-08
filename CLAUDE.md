@@ -162,8 +162,8 @@ src/sdr/
   main.py                  entrypoint ASGI (uvicorn sdr.main:app)
   cli.py                   python -m sdr.cli seed — carga inicial do catálogo da vertical
 web/                       Streamlit: chat + painel (qualificação, atendimento, agendamento,
-                           resumo) + tela "Fila" da equipe (assumir, responder, devolver) —
-                           SOMENTE via API HTTP
+                           follow-up) + tela "Fila" da equipe (resumo para o corretor,
+                           assumir, responder, devolver) — SOMENTE via API HTTP
 worker                     `python -m sdr.worker` (src/sdr/worker.py): só o laço de
                            ExecutarFollowUps; serviço `worker` no compose (mesma imagem)
 migrations/                Alembic — histórico ÚNICO para core + verticais

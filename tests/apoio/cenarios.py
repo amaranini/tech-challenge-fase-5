@@ -14,6 +14,7 @@ Formato de um roteiro:
       #   | {"acao": "devolver"}
       #   | {"acao": "simular_inatividade"} (demo: o worker manda o próximo follow-up já)
       #   | {"acao": "simular_inatividade", "espera": "recusa"} (opt-out)
+      #   | {"acao": "conferir_resumo_na_fila"} (tela Fila mostra o resumo do lead)
       "esperado": {
         "intencao": "compra",                           # igualdade
         "atendimento_estado": "aguardando_humano",      # estado de atendimento (IA × humano)

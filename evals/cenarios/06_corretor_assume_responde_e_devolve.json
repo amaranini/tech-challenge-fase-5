@@ -1,6 +1,6 @@
 {
   "nome": "corretor_assume_responde_e_devolve",
-  "descricao": "Aceite 4 da Etapa C: corretor assume pela Fila, responde, devolve; enquanto ele está ativo a Lia fica em silêncio; depois a Lia retoma sabendo o que o corretor disse.",
+  "descricao": "Aceite 4 da Etapa C: corretor assume pela Fila, responde, devolve; enquanto ele está ativo a Lia fica em silêncio; depois a Lia retoma sabendo o que o corretor disse. Ao assumir, o corretor vê o resumo do lead na tela Fila.",
   "falas": [
     "Quero comprar um apartamento na zona sul, até 800 mil",
     {
@@ -18,6 +18,9 @@
     {
       "acao": "assumir",
       "responsavel": "Rafael Souza"
+    },
+    {
+      "acao": "conferir_resumo_na_fila"
     },
     {
       "texto": "Oi Rafael! Quanto é o condomínio do IMV-001?",
