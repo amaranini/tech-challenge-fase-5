@@ -4,6 +4,11 @@ from pathlib import Path
 
 from sdr.core.application.ferramentas.buscar_catalogo import FerramentaBuscarCatalogo
 from sdr.core.vertical import InfraCompartilhada, VerticalMontada
+from sdr.verticals.imobiliario.agenda.adapters.agenda_imobiliaria import (
+    TIPOS_AGENDAMENTO,
+    ler_responsaveis,
+)
+from sdr.verticals.imobiliario.agenda.domain.atribuicao import RegraAtribuicaoImobiliaria
 from sdr.verticals.imobiliario.catalogo.adapters.carga_json import ler_imoveis_json
 from sdr.verticals.imobiliario.catalogo.adapters.catalogo_imobiliario import CatalogoImobiliario
 from sdr.verticals.imobiliario.catalogo.adapters.ferramenta_buscar_imoveis import (
@@ -21,11 +26,19 @@ from sdr.verticals.imobiliario.catalogo.application.use_cases.cadastrar_imoveis 
     CadastrarImoveis,
 )
 from sdr.verticals.imobiliario.config import SettingsImobiliario
+from sdr.verticals.imobiliario.followup.cadencia import (
+    CADENCIAS,
+    LEMBRETE_AGENDAMENTO,
+    ConsultaFollowUpImobiliaria,
+)
 from sdr.verticals.imobiliario.persona.lia import carregar_persona, carregar_prompt
 from sdr.verticals.imobiliario.qualificacao.adapters.intencoes import definir_intencoes
 from sdr.verticals.imobiliario.qualificacao.domain.regras import RegrasImobiliarias
+from sdr.verticals.imobiliario.resumo.template import TEMPLATE_RESUMO
 
-CATALOGO_INICIAL = Path(__file__).resolve().parent / "dados" / "imoveis.json"
+DADOS = Path(__file__).resolve().parent / "dados"
+CATALOGO_INICIAL = DADOS / "imoveis.json"
+RESPONSAVEIS = DADOS / "responsaveis.json"
 
 
 class PackImobiliario:
@@ -58,6 +71,8 @@ class PackImobiliario:
             return await cadastrar_imoveis.executar(ler_imoveis_json(self._catalogo_inicial))
 
         catalogo = CatalogoImobiliario(buscar_imoveis, repositorio)
+        zona_por_bairro = {i.bairro: i.zona.value for i in ler_imoveis_json(self._catalogo_inicial)}
+        regra = RegraAtribuicaoImobiliaria(zona_por_bairro)
         return VerticalMontada(
             catalogo=catalogo,
             carregar_catalogo_inicial=carregar_catalogo_inicial,
@@ -69,7 +84,14 @@ class PackImobiliario:
                 }
             ),
             regras_qualificacao=RegrasImobiliarias(),
-            prompt_descoberta=carregar_prompt("descoberta_v1"),
+            prompt_descoberta=carregar_prompt("descoberta_v2"),
             ferramentas=[FerramentaBuscarCatalogo(catalogo, DEFINICAO_BUSCAR_IMOVEIS)],
             routers=[criar_router(buscar_imoveis, repositorio)],
+            regra_atribuicao=regra,
+            tipos_agendamento=TIPOS_AGENDAMENTO,
+            responsaveis_iniciais=ler_responsaveis(RESPONSAVEIS),
+            template_resumo=TEMPLATE_RESUMO,
+            cadencias_followup=CADENCIAS,
+            consulta_followup=ConsultaFollowUpImobiliaria(regra),
+            lembrete_agendamento=LEMBRETE_AGENDAMENTO,
         )

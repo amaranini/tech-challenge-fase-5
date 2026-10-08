@@ -1,0 +1,26 @@
+[
+  {
+    "id": "6f1c2a10-0000-4000-8000-000000000001",
+    "nome": "Rafael Souza",
+    "titulo": "corretor da zona sul",
+    "especialidades": ["compra:sul"]
+  },
+  {
+    "id": "6f1c2a10-0000-4000-8000-000000000002",
+    "nome": "Camila Ito",
+    "titulo": "corretora da zona oeste",
+    "especialidades": ["compra:oeste"]
+  },
+  {
+    "id": "6f1c2a10-0000-4000-8000-000000000003",
+    "nome": "Bruno Lima",
+    "titulo": "corretor de locação",
+    "especialidades": ["locacao"]
+  },
+  {
+    "id": "6f1c2a10-0000-4000-8000-000000000004",
+    "nome": "Marina Costa",
+    "titulo": "especialista em investimentos",
+    "especialidades": ["investimentos"]
+  }
+]

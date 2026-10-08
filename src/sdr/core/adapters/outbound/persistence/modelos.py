@@ -4,6 +4,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Identity,
@@ -36,12 +37,22 @@ class LeadModel(Base):
     score_motivos: Mapped[list[str]] = mapped_column(JSONB, server_default="[]")
     proxima_acao: Mapped[str | None] = mapped_column(String(50))
     qualificado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Negociação de horário em curso (opções oferecidas, proposta aguardando confirmação).
+    agenda: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
+    # Atendimento (IA × humano): estado em coluna (fila/dashboard) + detalhes em JSONB.
+    atendimento_estado: Mapped[str] = mapped_column(String(30), server_default="atendimento_ia")
+    na_fila_desde: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    atendimento: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
+    opt_out_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     atualizado_em: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    __table_args__ = (UniqueConstraint("canal", "remetente_id", name="uq_leads_canal_remetente"),)
+    __table_args__ = (
+        UniqueConstraint("canal", "remetente_id", name="uq_leads_canal_remetente"),
+        Index("ix_leads_atendimento_fila", "atendimento_estado", "na_fila_desde"),
+    )
 
 
 class ConversaModel(Base):
@@ -88,4 +99,132 @@ class LeadEventoModel(Base):
     __table_args__ = (
         Index("ix_lead_eventos_lead_ocorrido", "lead_id", "ocorrido_em"),
         Index("ix_lead_eventos_tipo", "tipo"),
+    )
+
+
+# ---------------------------------------------------------------------- agenda (mock)
+# POC: a agenda dos responsáveis vive aqui. Produção: Google Calendar/Outlook no lugar de
+# `responsaveis`/`slots_agenda`; `agendamentos` continua sendo o registro do sistema.
+
+
+class ResponsavelModel(Base):
+    __tablename__ = "responsaveis"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    nome: Mapped[str] = mapped_column(String(200))
+    titulo: Mapped[str] = mapped_column(String(100))
+    especialidades: Mapped[list[str]] = mapped_column(JSONB, server_default="[]")
+    ativo: Mapped[bool] = mapped_column(Boolean, server_default="true")
+
+
+class SlotAgendaModel(Base):
+    __tablename__ = "slots_agenda"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    responsavel_id: Mapped[UUID] = mapped_column(ForeignKey("responsaveis.id", ondelete="CASCADE"))
+    inicio: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    fim: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Ocupado por outro compromisso do responsável (fora do sistema).
+    bloqueado: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    # Ocupado por um agendamento do sistema (sem FK: evita ciclo com agendamentos).
+    agendamento_id: Mapped[UUID | None] = mapped_column()
+
+    __table_args__ = (
+        UniqueConstraint("responsavel_id", "inicio", name="uq_slots_agenda_responsavel_inicio"),
+        Index("ix_slots_agenda_inicio", "inicio"),
+    )
+
+
+class AgendamentoModel(Base):
+    __tablename__ = "agendamentos"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    lead_id: Mapped[UUID] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"))
+    responsavel_id: Mapped[UUID] = mapped_column(ForeignKey("responsaveis.id"))
+    slot_id: Mapped[UUID] = mapped_column(ForeignKey("slots_agenda.id"))
+    inicio: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    fim: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    tipo: Mapped[str] = mapped_column(String(50))
+    modalidade: Mapped[str] = mapped_column(String(50))
+    status: Mapped[str] = mapped_column(String(20))
+    itens: Mapped[list[str]] = mapped_column(JSONB, server_default="[]")
+    chave_idempotencia: Mapped[str] = mapped_column(String(200), unique=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    atualizado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_agendamentos_lead_status", "lead_id", "status"),
+        Index("ix_agendamentos_inicio", "inicio"),
+    )
+
+
+class ResumoHandoffModel(Base):
+    """Versões do resumo para o responsável (uma linha por versão)."""
+
+    __tablename__ = "resumos_handoff"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    lead_id: Mapped[UUID] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"))
+    versao: Mapped[int] = mapped_column(Integer)
+    gerado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    gatilho: Mapped[str] = mapped_column(String(50))
+    template_versao: Mapped[str] = mapped_column(String(50))
+    titulo: Mapped[str] = mapped_column(String(200))
+    secoes: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    impressao: Mapped[str] = mapped_column(String(64))
+    descartados: Mapped[list[str]] = mapped_column(JSONB, server_default="[]")
+    modelo: Mapped[str | None] = mapped_column(String(100))
+    tokens_entrada: Mapped[int] = mapped_column(Integer, server_default="0")
+    tokens_saida: Mapped[int] = mapped_column(Integer, server_default="0")
+
+    __table_args__ = (UniqueConstraint("lead_id", "versao", name="uq_resumos_handoff_versao"),)
+
+
+# ---------------------------------------------------------------------- CRM (mock)
+# Produção: HubSpot (ou outro CRM) — contato/negócio via API, resumo anexado como nota.
+
+
+class CrmRegistroModel(Base):
+    __tablename__ = "crm_registros"
+
+    lead_id: Mapped[UUID] = mapped_column(
+        ForeignKey("leads.id", ondelete="CASCADE"), primary_key=True
+    )
+    crm_id: Mapped[str] = mapped_column(String(50), unique=True)
+    dados: Mapped[dict[str, Any]] = mapped_column(JSONB)  # o lead como o CRM o vê
+    resumo_versao: Mapped[int] = mapped_column(Integer)
+    resumo: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    atualizado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+# ---------------------------------------------------------------------- follow-up
+
+
+class FollowUpModel(Base):
+    """Fila de follow-ups (retomadas, lembretes, SLA da fila), consumida com SKIP LOCKED."""
+
+    __tablename__ = "followups_agendados"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    lead_id: Mapped[UUID] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"))
+    tipo: Mapped[str] = mapped_column(String(30))
+    etapa: Mapped[int] = mapped_column(Integer, server_default="1")
+    situacao: Mapped[str | None] = mapped_column(String(30))
+    executar_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(20))
+    motivo: Mapped[str | None] = mapped_column(String(100))
+    referencia: Mapped[str | None] = mapped_column(String(100))
+    ignorar_horario: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    reservado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    atualizado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_followups_fila", "status", "executar_em"),
+        Index("ix_followups_lead", "lead_id", "status"),
     )

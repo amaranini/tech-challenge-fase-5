@@ -48,6 +48,21 @@ CAMPOS = {
     "aceita_pets": "Pets",
 }
 CAMPOS_EM_REAIS = {"preco_max", "aluguel_max", "ticket"}
+DIAS = ("seg", "ter", "qua", "qui", "sex", "sáb", "dom")
+TIPOS_AGENDAMENTO = {
+    "visita_imovel": "🏠 Visita aos imóveis",
+    "reuniao_especialista": "📈 Reunião com especialista",
+}
+MODALIDADES = {"presencial": "presencial", "online": "online", "escritorio": "no escritório"}
+NAO_INFORMADO = "não informado"
+ATENDIMENTO = {
+    "atendimento_ia": "🤖 Lia (assistente virtual)",
+    "confirmando_handoff": "❓ Lia confirmando a transferência para a equipe",
+    "aguardando_humano": "⏳ Na fila, aguardando a equipe",
+    "atendimento_humano": "🧑‍💼 Em atendimento humano",
+    "confirmando_retorno_ia": "❓ Lia confirmando a volta para a assistente",
+}
+AVATARES = {"lead": "🙂", "assistente": "🏠", "responsavel": "🧑‍💼"}
 
 
 def md(texto: object) -> str:
@@ -97,8 +112,180 @@ def descrever_evento(evento: dict[str, Any]) -> str:
         case "LeadCriado":
             texto = "lead criado"
         case outro:
-            texto = str(outro)
+            texto = descrever_evento_pos_qualificacao(outro, p)
     return texto
+
+
+def _agendamento_criado(p: dict[str, Any]) -> str:
+    quem = f"{p.get('responsavel_nome')} ({p.get('responsavel_titulo')})"
+    modalidade = MODALIDADES.get(str(p.get("modalidade")), p.get("modalidade"))
+    return f"📅 **agendado**: {formatar_horario(p.get('inicio'))} com {quem} · {modalidade}"
+
+
+EVENTOS_POS_QUALIFICACAO: dict[str, Any] = {
+    "AgendamentoCriado": _agendamento_criado,
+    "AgendamentoRemarcado": lambda p: (
+        f"📅 **remarcado**: {formatar_horario(p.get('inicio_anterior'))} → "
+        f"{formatar_horario(p.get('inicio'))}"
+    ),
+    "AgendamentoCancelado": lambda p: f"📅 **cancelado**: {formatar_horario(p.get('inicio'))}",
+    "ResumoHandoffGerado": lambda p: (
+        f"📝 resumo v{p.get('versao')} gerado e enviado ao CRM ({p.get('crm_id')})"
+    ),
+    "HandoffSolicitado": lambda p: f"🙋 pediu atendimento humano ({p.get('motivo')})",
+    "HandoffConfirmado": lambda p: "⏳ **entrou na fila** do atendimento humano",
+    "HandoffRecusado": lambda p: f"🤖 seguiu com a Lia ({p.get('motivo')})",
+    "AtendimentoHumanoIniciado": lambda p: (
+        f"🧑‍💼 **{p.get('responsavel')} assumiu** (espera {p.get('espera_segundos')}s)"
+    ),
+    "AtendimentoHumanoEncerrado": lambda p: f"🤖 {p.get('responsavel')} devolveu para a Lia",
+    "RetornoIASolicitado": lambda p: "❓ quer voltar para a Lia",
+    "RetornoIAConfirmado": lambda p: "🤖 **saiu da fila** e voltou para a Lia",
+    "MensagemDuranteEspera": lambda p: "💬 escreveu enquanto aguardava na fila",
+    "HandoffSLAExcedido": lambda p: (
+        f"🚨 **SLA da fila estourado** ({p.get('espera_util_minutos')} min úteis)"
+    ),
+    "FollowUpAgendado": lambda p: (
+        f"⏰ follow-up {p.get('etapa')} agendado para {formatar_horario(p.get('executar_em'))}"
+    ),
+    "FollowUpEnviado": lambda p: (
+        f"📨 **follow-up enviado** ({p.get('tipo')}"
+        + (f", etapa {p.get('etapa')}" if p.get("etapa") else "")
+        + (", requer template" if p.get("requer_template") else "")
+        + ")"
+    ),
+    "LeadEncerradoPorInatividade": lambda p: "💤 cadência encerrada por inatividade",
+    "LeadReengajado": lambda p: f"🔁 **reengajou** (respondeu ao follow-up {p.get('etapa')})",
+    "LeadOptOut": lambda p: "🛑 **opt-out**: pediu para não receber mais mensagens",
+}
+
+
+def descrever_evento_pos_qualificacao(tipo: str, p: dict[str, Any]) -> str:
+    descrever = EVENTOS_POS_QUALIFICACAO.get(tipo)
+    return str(descrever(p)) if descrever else tipo
+
+
+def formatar_horario(iso: object) -> str:
+    """ISO 8601 → "qui 08/10 14h" no fuso local de quem vê."""
+    try:
+        momento = datetime.fromisoformat(str(iso)).astimezone()
+    except ValueError:
+        return str(iso)
+    return f"{DIAS[momento.weekday()]} {momento:%d/%m %Hh%M}".removesuffix("00")
+
+
+def descrever_agendamento(ag: dict[str, Any]) -> str:
+    tipo = TIPOS_AGENDAMENTO.get(ag["tipo"], ag["tipo"])
+    r = ag["responsavel"]
+    modalidade = MODALIDADES.get(ag["modalidade"], ag["modalidade"])
+    return (
+        f"**{tipo}** · {formatar_horario(ag['inicio'])} com **{r['nome']}** "
+        f"({r['titulo']}) · {modalidade}"
+    )
+
+
+def mostrar_secao(secao: dict[str, Any]) -> None:
+    """Uma seção do resumo de handoff, conforme o tipo (o template vem da vertical)."""
+    st.markdown(f"**{secao['titulo']}**")
+    conteudo = secao["conteudo"]
+    if conteudo == NAO_INFORMADO:
+        st.caption(NAO_INFORMADO)
+        return
+    match secao["tipo"]:
+        case "lista":
+            linhas = [f"- {i['texto']} — _“{i['evidencia']}”_" for i in conteudo]
+        case "itens_catalogo":
+            linhas = [f"- **{i['id']}** {i['titulo']} — {i['reacao']}" for i in conteudo]
+        case "trechos":
+            linhas = [f"> “{trecho}”" for trecho in conteudo]
+        case "ficha":
+            linhas = [
+                f"- {CAMPOS.get(c, c)}: "
+                + (f"_{NAO_INFORMADO}_" if v == NAO_INFORMADO else formatar_valor(c, v))
+                for c, v in conteudo.items()
+            ]
+        case "score":
+            motivos = "".join(f"\n  - {m}" for m in conteudo["motivos"])
+            linhas = [f"- {conteudo['pontos']}/100 · {conteudo['classificacao']}{motivos}"]
+        case "agendamento":
+            situacao = "" if conteudo["status"] == "ativo" else f" ({conteudo['status']})"
+            linhas = [
+                f"- {TIPOS_AGENDAMENTO.get(conteudo['tipo'], conteudo['tipo'])}: "
+                f"{formatar_horario(conteudo['inicio'])} com {conteudo['responsavel']} · "
+                f"{MODALIDADES.get(conteudo['modalidade'], conteudo['modalidade'])}{situacao}"
+            ]
+        case _:
+            linhas = [str(conteudo)]
+    st.markdown(md("\n".join(linhas)))
+
+
+def mostrar_atendimento(atendimento: dict[str, Any]) -> None:
+    situacao = ATENDIMENTO.get(atendimento["estado"], atendimento["estado"])
+    if atendimento["responsavel"]:
+        situacao += f" com **{atendimento['responsavel']}**"
+    if atendimento["na_fila_desde"] and atendimento["estado"] != "atendimento_humano":
+        situacao += f" · desde {formatar_horario(atendimento['na_fila_desde'])}"
+    st.markdown(md(f"**Atendimento:** {situacao}"))
+
+
+def mostrar_followup(lead: dict[str, Any]) -> None:
+    """Próximo follow-up + botão de demo que "faz o lead sumir" (o worker envia já)."""
+    if lead.get("opt_out_em"):
+        st.caption("🛑 Opt-out: sem mensagens ativas para este lead")
+        return
+    proximos = [f for f in lead.get("followups", []) if f["tipo"] == "retomada"]
+    texto = (
+        f"⏰ Próximo follow-up: etapa {proximos[0]['etapa']} em "
+        f"{formatar_horario(proximos[0]['executar_em'])}"
+        if proximos
+        else "⏰ Sem follow-up programado"
+    )
+    colunas = st.columns([3, 2])
+    colunas[0].caption(texto)
+    if colunas[1].button("⏩ Simular inatividade", key="simular_inatividade") and (
+        falha := api_post(f"/demo/leads/{lead['lead_id']}/simular-inatividade")
+    ):
+        st.error(falha)
+
+
+def mostrar_score(lead: dict[str, Any]) -> None:
+    if lead["score"] is None:
+        st.markdown("**Score:** _aguardando a intenção_")
+        return
+    emoji, cor = CLASSIFICACOES.get(lead["classificacao"], ("•", "gray"))
+    st.markdown(f"**Score:** :{cor}[**{lead['score']}/100 · {emoji} {lead['classificacao']}**]")
+    st.progress(min(max(lead["score"], 0), 100) / 100)
+    with st.expander("Por que esse score?", expanded=True):
+        st.markdown(md("\n".join(f"- {m}" for m in lead["score_motivos"])) or "—")
+
+
+def mostrar_resumo(lead_id: str, *, recolhido: bool) -> None:
+    """Resumo para quem vai atender (tela Fila). `recolhido`: num expander, para ler antes
+    de assumir; senão, num quadro aberto (dentro de outro expander não cabe expander)."""
+    try:
+        resposta = httpx.get(f"{API_URL}/leads/{lead_id}/resumo", timeout=TIMEOUT)
+    except httpx.HTTPError:
+        return
+    if resposta.status_code == httpx.codes.NOT_FOUND:
+        st.caption("📝 Resumo ainda não gerado (sai em instantes após o handoff).")
+        return
+    if resposta.is_error:
+        return
+    resumo: dict[str, Any] = resposta.json()
+    titulo = (
+        f"📝 {resumo['titulo']} · v{resumo['versao']} ({formatar_horario(resumo['gerado_em'])})"
+    )
+    area = st.expander(titulo) if recolhido else st.container(border=True)
+    with area:
+        if not recolhido:
+            st.markdown(f"**{titulo}**")
+        st.caption(f"gerado por {resumo['gatilho']} · também enviado ao CRM")
+        for secao in resumo["secoes"]:
+            mostrar_secao(secao)
+        if resumo["descartados"]:
+            st.caption(
+                f"⚓ {len(resumo['descartados'])} item(ns) descartado(s) por falta de lastro"
+            )
 
 
 def api_get(caminho: str, **params: Any) -> Any:
@@ -178,9 +365,90 @@ with st.sidebar:
     if escolhido != atual:
         st.session_state.lead_id = escolhido
         st.rerun()
+    st.radio(
+        "Tela",
+        ["chat", "fila"],
+        key="tela",
+        format_func=lambda t: {"chat": "💬 Chat (lead)", "fila": "🧑‍💼 Fila (equipe)"}[t],
+        horizontal=True,
+    )
     st.caption(f"API: {API_URL}")
 
+
 # ------------------------------------------------------------------ conversa + painel
+def tela_fila() -> None:
+    """Tela da equipe: fila de quem aguarda, assumir, responder e devolver para a Lia."""
+    st.title("🧑‍💼 Fila de atendimento humano")
+    responsavel = st.text_input("Seu nome (quem está atendendo)", key="responsavel_nome")
+    fila_e_atendimentos(responsavel.strip() or "Equipe")
+
+
+def api_post(caminho: str, corpo: dict[str, Any] | None = None) -> str | None:
+    """POST na API; devolve a mensagem de erro (ou None se deu certo)."""
+    try:
+        resposta = httpx.post(f"{API_URL}{caminho}", json=corpo or {}, timeout=TIMEOUT)
+    except httpx.HTTPError as erro:
+        return str(erro)
+    if resposta.is_error:
+        return str(resposta.json().get("detail", resposta.text))
+    return None
+
+
+def minutos(segundos: int) -> str:
+    return f"{segundos // 60} min {segundos % 60:02d} s"
+
+
+@st.fragment(run_every=3)
+def fila_e_atendimentos(responsavel: str) -> None:
+    try:
+        aguardando: list[dict[str, Any]] = api_get("/atendimentos/fila")
+        em_atendimento: list[dict[str, Any]] = api_get("/atendimentos")
+    except httpx.HTTPError as erro:
+        st.warning(f"Sem conexão com a API: {erro}")
+        return
+
+    st.subheader(f"⏳ Aguardando ({len(aguardando)})")
+    if not aguardando:
+        st.caption("Ninguém na fila.")
+    for item in aguardando:
+        lead = item["lead_id"]
+        colunas = st.columns([3, 2, 2, 2])
+        colunas[0].markdown(f"**{lead}**")
+        colunas[1].markdown(f"esperando há {minutos(item['espera_segundos'])}")
+        colunas[2].markdown(f"{item['intencao'] or '—'} · score {item['score'] or '—'}")
+        if colunas[3].button("Assumir", key=f"assumir-{lead}") and (
+            falha := api_post(f"/atendimentos/{lead}/assumir", {"responsavel": responsavel})
+        ):
+            st.error(falha)
+        mostrar_resumo(lead, recolhido=True)
+
+    st.subheader(f"🧑‍💼 Em atendimento ({len(em_atendimento)})")
+    for item in em_atendimento:
+        lead = item["lead_id"]
+        quem = item["atendimento"]["responsavel"]
+        with st.expander(f"{lead} — com {quem}", expanded=True):
+            mostrar_resumo(lead, recolhido=False)
+            for m in api_get(f"/conversas/{lead}/mensagens")["mensagens"][-12:]:
+                autor = {"lead": "🙂 Lead", "assistente": "🏠 Lia"}.get(
+                    m["papel"], f"🧑‍💼 {m.get('responsavel') or 'Equipe'}"
+                )
+                st.markdown(md(f"**{autor}:** {m['texto']}"))
+            with st.form(f"responder-{lead}", clear_on_submit=True):
+                texto = st.text_area("Responder ao lead", key=f"texto-{lead}")
+                if st.form_submit_button("Enviar") and texto.strip():
+                    corpo = {"texto": texto, "responsavel": responsavel}
+                    if falha := api_post(f"/atendimentos/{lead}/mensagens", corpo):
+                        st.error(falha)
+            if st.button("↩️ Devolver para a Lia", key=f"devolver-{lead}") and (
+                falha := api_post(f"/atendimentos/{lead}/devolver")
+            ):
+                st.error(falha)
+
+
+if st.session_state.get("tela") == "fila":
+    tela_fila()
+    st.stop()
+
 lead_id: str = st.session_state.lead_id
 st.title("🏠 Lia — consultora da imobiliária")
 st.caption(
@@ -206,7 +474,9 @@ def conversa(lead_id: str) -> None:
         return
     for mensagem in historico["mensagens"]:
         papel = "user" if mensagem["papel"] == "lead" else "assistant"
-        with st.chat_message(papel, avatar="🙂" if papel == "user" else "🏠"):
+        with st.chat_message(papel, avatar=AVATARES.get(mensagem["papel"], "🏠")):
+            if mensagem["papel"] == "responsavel":
+                st.caption(f"{mensagem.get('responsavel') or 'Equipe'} · atendimento humano")
             st.markdown(md(mensagem["texto"]))
             if mensagem["status"] == "falha":
                 st.caption("⚠️ a Lia não conseguiu responder a esta mensagem")
@@ -235,21 +505,18 @@ def painel(lead_id: str) -> None:
 
     intencao = lead["intencao"]
     rotulo = INTENCOES.get(intencao, intencao) if intencao else "❔ indefinida"
+    mostrar_atendimento(lead["atendimento"])
     st.markdown(f"**Intenção:** {rotulo}")
 
-    if lead["score"] is None:
-        st.markdown("**Score:** _aguardando a intenção_")
-    else:
-        emoji, cor = CLASSIFICACOES.get(lead["classificacao"], ("•", "gray"))
-        st.markdown(f"**Score:** :{cor}[**{lead['score']}/100 · {emoji} {lead['classificacao']}**]")
-        st.progress(min(max(lead["score"], 0), 100) / 100)
-        with st.expander("Por que esse score?", expanded=True):
-            st.markdown(md("\n".join(f"- {m}" for m in lead["score_motivos"])) or "—")
+    mostrar_score(lead)
 
     if acao := lead["proxima_acao"]:
         st.success(f"**Próxima ação:** {ACOES.get(acao, acao)}")
     elif intencao:
         st.caption("Próxima ação: definida quando os dados essenciais estiverem na ficha")
+    if agendamento := lead.get("agendamento"):
+        st.info(md(f"📅 {descrever_agendamento(agendamento)}"))
+    mostrar_followup(lead)
 
     if intencao:
         st.markdown(f"**Ficha de {intencao}**")

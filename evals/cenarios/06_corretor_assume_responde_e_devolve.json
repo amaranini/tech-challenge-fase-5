@@ -1,0 +1,66 @@
+{
+  "nome": "corretor_assume_responde_e_devolve",
+  "descricao": "Aceite 4 da Etapa C: corretor assume pela Fila, responde, devolve; enquanto ele está ativo a Lia fica em silêncio; depois a Lia retoma sabendo o que o corretor disse. Ao assumir, o corretor vê o resumo do lead na tela Fila.",
+  "falas": [
+    "Quero comprar um apartamento na zona sul, até 800 mil",
+    {
+      "texto": "Prefiro falar com um corretor",
+      "esperado": {
+        "atendimento_estado": "confirmando_handoff"
+      }
+    },
+    {
+      "texto": "Sim, por favor",
+      "esperado": {
+        "atendimento_estado": "aguardando_humano"
+      }
+    },
+    {
+      "acao": "assumir",
+      "responsavel": "Rafael Souza"
+    },
+    {
+      "acao": "conferir_resumo_na_fila"
+    },
+    {
+      "texto": "Oi Rafael! Quanto é o condomínio do IMV-001?",
+      "esperado": {
+        "sem_resposta": true,
+        "atendimento_estado": "atendimento_humano"
+      }
+    },
+    {
+      "acao": "responder",
+      "texto": "Oi! O condomínio do IMV-001 é R$ 850 por mês, e o IPTU é R$ 210."
+    },
+    {
+      "acao": "devolver"
+    },
+    {
+      "texto": "Valeu! Me lembra: quanto o Rafael falou que é o condomínio?",
+      "esperado": {
+        "atendimento_estado": "atendimento_ia",
+        "resposta_contem": [
+          "850"
+        ]
+      }
+    }
+  ],
+  "esperado": {
+    "atendimento_estado": "atendimento_ia",
+    "eventos": [
+      {
+        "tipo": "AtendimentoHumanoIniciado",
+        "payload": {
+          "responsavel": "Rafael Souza"
+        }
+      },
+      {
+        "tipo": "AtendimentoHumanoEncerrado",
+        "payload": {
+          "responsavel": "Rafael Souza"
+        }
+      }
+    ]
+  }
+}

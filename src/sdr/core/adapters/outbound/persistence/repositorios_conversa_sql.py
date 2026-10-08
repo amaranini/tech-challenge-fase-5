@@ -1,4 +1,6 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select, update
@@ -12,6 +14,8 @@ from sdr.core.adapters.outbound.persistence.modelos import (
     MensagemModel,
 )
 from sdr.core.application.ports.repositorios import ResumoLead
+from sdr.core.domain.agenda import NegociacaoAgenda, Operacao, Proposta, Slot
+from sdr.core.domain.atendimento import Atendimento, EstadoAtendimento, MotivoHandoff
 from sdr.core.domain.conversa import (
     Canal,
     Conversa,
@@ -39,6 +43,91 @@ def _qualificacao(m: LeadModel) -> Qualificacao:
     )
 
 
+def _slot_para_json(slot: Slot) -> dict[str, str]:
+    return {
+        "id": str(slot.id),
+        "responsavel_id": str(slot.responsavel_id),
+        "inicio": slot.inicio.isoformat(),
+        "fim": slot.fim.isoformat(),
+    }
+
+
+def _slot_de_json(dados: Mapping[str, Any]) -> Slot:
+    return Slot(
+        id=UUID(dados["id"]),
+        responsavel_id=UUID(dados["responsavel_id"]),
+        inicio=datetime.fromisoformat(dados["inicio"]),
+        fim=datetime.fromisoformat(dados["fim"]),
+    )
+
+
+def negociacao_para_json(negociacao: NegociacaoAgenda) -> dict[str, Any]:
+    if negociacao == NegociacaoAgenda():
+        return {}
+    p = negociacao.proposta
+    return {
+        "ofertados": [_slot_para_json(s) for s in negociacao.ofertados],
+        "proposta": None
+        if p is None
+        else {
+            "operacao": p.operacao.value,
+            "slot": _slot_para_json(p.slot) if p.slot else None,
+            "modalidade": p.modalidade,
+            "agendamento_id": str(p.agendamento_id) if p.agendamento_id else None,
+        },
+        "recusou": negociacao.recusou,
+    }
+
+
+def negociacao_de_json(dados: Mapping[str, Any] | None) -> NegociacaoAgenda:
+    if not dados:
+        return NegociacaoAgenda()
+    p = dados.get("proposta")
+    proposta = (
+        None
+        if not p
+        else Proposta(
+            operacao=Operacao(p["operacao"]),
+            slot=_slot_de_json(p["slot"]) if p.get("slot") else None,
+            modalidade=p.get("modalidade"),
+            agendamento_id=UUID(p["agendamento_id"]) if p.get("agendamento_id") else None,
+        )
+    )
+    return NegociacaoAgenda(
+        ofertados=tuple(_slot_de_json(s) for s in dados.get("ofertados", [])),
+        proposta=proposta,
+        recusou=bool(dados.get("recusou", False)),
+    )
+
+
+def _atendimento(m: LeadModel) -> Atendimento:
+    dados = m.atendimento or {}
+    desde = dados.get("desde")
+    motivo = dados.get("motivo")
+    return Atendimento(
+        lead_id=m.id,
+        estado=EstadoAtendimento(m.atendimento_estado),
+        desde=datetime.fromisoformat(desde) if desde else None,
+        na_fila_desde=m.na_fila_desde,
+        motivo=MotivoHandoff(motivo) if motivo else None,
+        responsavel=dados.get("responsavel"),
+        respostas_ambiguas=int(dados.get("respostas_ambiguas", 0)),
+    )
+
+
+def _atendimento_para_colunas(a: Atendimento) -> dict[str, Any]:
+    return {
+        "atendimento_estado": a.estado.value,
+        "na_fila_desde": a.na_fila_desde,
+        "atendimento": {
+            "desde": a.desde.isoformat() if a.desde else None,
+            "motivo": a.motivo.value if a.motivo else None,
+            "responsavel": a.responsavel,
+            "respostas_ambiguas": a.respostas_ambiguas,
+        },
+    }
+
+
 def _lead(m: LeadModel) -> Lead:
     return Lead(
         id=m.id,
@@ -47,6 +136,9 @@ def _lead(m: LeadModel) -> Lead:
         criado_em=m.criado_em,
         qualificacao=_qualificacao(m),
         nome=m.nome,
+        agenda=negociacao_de_json(m.agenda),
+        atendimento=_atendimento(m),
+        opt_out_em=m.opt_out_em,
     )
 
 
@@ -102,6 +194,7 @@ class LeadRepositorySql:
             "score_motivos": list(q.score.motivos) if q.score else [],
             "proxima_acao": q.proxima_acao,
             "qualificado_em": q.qualificado_em,
+            "agenda": negociacao_para_json(lead.agenda),
         }
         stmt = insert(LeadModel).values(
             id=lead.id,
@@ -132,6 +225,40 @@ class LeadRepositorySql:
         async with self._sessoes() as sessao:
             linhas = (await sessao.execute(stmt)).all()
         return [ResumoLead(_lead(m), total, ultima_em) for m, total, ultima_em in linhas]
+
+    async def registrar_opt_out(self, lead_id: UUID, momento: datetime) -> None:
+        async with self._sessoes.begin() as sessao:
+            await sessao.execute(
+                update(LeadModel)
+                .where(LeadModel.id == lead_id, LeadModel.opt_out_em.is_(None))
+                .values(opt_out_em=momento, atualizado_em=func.now())
+            )
+
+    async def salvar_atendimento(
+        self, atendimento: Atendimento, esperado: EstadoAtendimento
+    ) -> bool:
+        async with self._sessoes.begin() as sessao:
+            resultado = await sessao.execute(
+                update(LeadModel)
+                .where(
+                    LeadModel.id == atendimento.lead_id,
+                    LeadModel.atendimento_estado == esperado.value,
+                )
+                .values(**_atendimento_para_colunas(atendimento), atualizado_em=func.now())
+            )
+        return bool(resultado.rowcount)  # type: ignore[attr-defined]
+
+    async def listar_por_atendimento(
+        self, estados: Sequence[EstadoAtendimento], limite: int = 100
+    ) -> list[Lead]:
+        async with self._sessoes() as sessao:
+            modelos = await sessao.scalars(
+                select(LeadModel)
+                .where(LeadModel.atendimento_estado.in_([e.value for e in estados]))
+                .order_by(LeadModel.na_fila_desde.asc().nulls_last(), LeadModel.atualizado_em)
+                .limit(limite)
+            )
+            return [_lead(m) for m in modelos]
 
 
 class ConversaRepositorySql:

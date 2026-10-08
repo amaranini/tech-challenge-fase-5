@@ -9,4 +9,4 @@ class SettingsImobiliario(BaseSettings):
     )
 
     distancia_metro_padrao_m: int = 1000  # o que "perto do metrô" significa na busca
-    versao_prompt: str = "lia_v1"  # arquivo em persona/prompts/<versao>.md
+    versao_prompt: str = "lia_v2"  # arquivo em persona/prompts/<versao>.md

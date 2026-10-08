@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
+from sdr.core.domain.atendimento import Atendimento, EstadoAtendimento
 from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem, StatusMensagem
 from sdr.core.domain.eventos import EventoLead
 
@@ -26,6 +27,24 @@ class LeadRepository(Protocol):
 
     async def listar(self, canal: Canal | None, limite: int) -> list[ResumoLead]:
         """Mais recentes primeiro (por última interação)."""
+        ...
+
+    async def salvar_atendimento(
+        self, atendimento: Atendimento, esperado: EstadoAtendimento
+    ) -> bool:
+        """Grava o estado de atendimento SÓ se o atual ainda for `esperado` (compare-and-set:
+        um turno da IA nunca sobrescreve o humano que assumiu no meio). `salvar` não mexe
+        no atendimento."""
+        ...
+
+    async def registrar_opt_out(self, lead_id: UUID, momento: datetime) -> None:
+        """Lead pediu para não receber mais mensagens ativas (`salvar` não mexe nisso)."""
+        ...
+
+    async def listar_por_atendimento(
+        self, estados: Sequence[EstadoAtendimento], limite: int = 100
+    ) -> list[Lead]:
+        """Na ordem de chegada na fila (mais antigo primeiro)."""
         ...
 
 

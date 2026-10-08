@@ -5,11 +5,16 @@ prioridade de campos declarada pela vertical (IntencaoVertical), recebida por in
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from sdr.core.application.ports.agenda import AgendaPort
+from sdr.core.application.ports.followup import FollowUpRepository
+from sdr.core.application.ports.relogio import RelogioPort
 from sdr.core.application.ports.repositorios import LeadEventoRepository, LeadRepository
+from sdr.core.domain.agenda import Agendamento
 from sdr.core.domain.conversa import Canal, Lead
 from sdr.core.domain.eventos import EventoLead
+from sdr.core.domain.followup import FollowUp
 from sdr.core.domain.qualificacao import IntencaoVertical, campos_faltantes
 
 
@@ -18,6 +23,8 @@ class EstadoLead:
     lead: Lead
     campos_faltantes: list[str]  # da intenção atual, em ordem de prioridade
     eventos: list[EventoLead]  # em ordem cronológica
+    agendamento: Agendamento | None = None  # ativo e ainda por acontecer
+    followups: list[FollowUp] = field(default_factory=list)  # pendentes, em ordem
 
 
 class ObterLead:
@@ -26,9 +33,16 @@ class ObterLead:
         leads: LeadRepository,
         eventos: LeadEventoRepository,
         intencoes: Sequence[IntencaoVertical],
+        *,
+        agenda: AgendaPort | None = None,
+        relogio: RelogioPort | None = None,
+        followups: FollowUpRepository | None = None,
     ) -> None:
+        self._followups = followups
         self._leads = leads
         self._eventos = eventos
+        self._agenda = agenda
+        self._relogio = relogio
         self._intencoes = {i.nome: i for i in intencoes}
 
     async def executar(
@@ -43,4 +57,8 @@ class ObterLead:
             campos_faltantes(qualificacao.ficha, intencao.prioridade_campos) if intencao else []
         )
         eventos = await self._eventos.listar(lead.id, limite_eventos)
-        return EstadoLead(lead, faltantes, eventos)
+        agendamento = None
+        if self._agenda is not None and self._relogio is not None:
+            agendamento = await self._agenda.agendamento_ativo(lead.id, self._relogio.agora())
+        pendentes = await self._followups.pendentes(lead.id) if self._followups else []
+        return EstadoLead(lead, faltantes, eventos, agendamento, pendentes)

@@ -1,12 +1,21 @@
 {
   "nome": "investimento_renda",
-  "descricao": "Exemplo 2 do enunciado: lead quer investir em imóveis para renda; a Lia qualifica o investimento até a próxima ação encaminhar_especialista.",
+  "descricao": "Exemplo 2 do enunciado: lead quer investir em imóveis para renda; a Lia qualifica o investimento (encaminhar_especialista) e marca uma reunião online com a especialista em investimentos, com confirmação explícita.",
   "falas": [
     "Quero investir em imóveis para renda",
     "Tenho uns 500 mil pra investir",
     "Algo em torno de 6% ao ano",
     "Penso no longo prazo, mais de 5 anos",
-    "Seria meu primeiro investimento em imóvel"
+    "Seria meu primeiro investimento em imóvel",
+    {
+      "texto": "Pode ser na terça de manhã, online",
+      "esperado": {
+        "eventos_ausentes": [
+          "AgendamentoCriado"
+        ]
+      }
+    },
+    "Sim, confirmado"
   ],
   "esperado": {
     "intencao": "investimento",
@@ -38,10 +47,33 @@
           "intencao": "investimento",
           "proxima_acao": "encaminhar_especialista"
         }
+      },
+      {
+        "tipo": "AgendamentoCriado",
+        "payload": {
+          "tipo": "reuniao_especialista",
+          "modalidade": "online",
+          "responsavel_titulo": "especialista em investimentos",
+          "inicio": {
+            "dia_semana": "terca",
+            "periodo": "manha"
+          }
+        }
       }
     ],
     "eventos_ausentes": [
       "IntencaoAlterada"
-    ]
+    ],
+    "contagem_eventos": {
+      "AgendamentoCriado": 1
+    },
+    "resumo": {
+      "gatilho": "AgendamentoCriado",
+      "secoes": {
+        "agendamento": {
+          "preenchido": true
+        }
+      }
+    }
   }
 }

@@ -5,7 +5,7 @@ from pathlib import Path
 from sdr.core.domain.agente import Persona
 
 PASTA_PROMPTS = Path(__file__).resolve().parent / "prompts"
-VERSAO_ATUAL = "lia_v1"
+VERSAO_ATUAL = "lia_v2"
 PADRAO_CODIGO_IMOVEL = r"\bIMV-\d{3}\b"
 
 

@@ -82,7 +82,7 @@ async def test_post_retorna_202_sem_a_resposta_e_o_polling_mostra_processando() 
         ("lead", "processada"),
         ("lead", "processada"),
         ("lead", "processada"),
-        ("agente", "enviada"),
+        ("assistente", "enviada"),
     ]
     assert depois["mensagens"][-1]["texto"] == "Zona sul até 800 mil, anotado!"
 

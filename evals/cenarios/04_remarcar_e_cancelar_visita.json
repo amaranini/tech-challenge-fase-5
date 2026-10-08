@@ -1,0 +1,73 @@
+{
+  "nome": "remarcar_e_cancelar_visita",
+  "descricao": "Lead da compra agenda a visita escolhendo uma das opções, remarca para outra opção oferecida e depois cancela — cada passo só acontece após a confirmação explícita.",
+  "falas": [
+    "Quero comprar um apartamento na zona sul",
+    "Até 800 mil, 2 quartos",
+    "Quero me mudar nos próximos 2 meses e vou financiar com FGTS",
+    {
+      "texto": "Pode ser a primeira opção",
+      "esperado": {
+        "eventos_ausentes": [
+          "AgendamentoCriado"
+        ]
+      }
+    },
+    "Sim",
+    {
+      "texto": "Surgiu um imprevisto, preciso remarcar. Quais outros horários você tem?",
+      "esperado": {
+        "eventos_ausentes": [
+          "AgendamentoRemarcado"
+        ]
+      }
+    },
+    {
+      "texto": "Pode ser a segunda opção",
+      "esperado": {
+        "eventos_ausentes": [
+          "AgendamentoRemarcado"
+        ]
+      }
+    },
+    "Pode sim",
+    {
+      "texto": "Pensando melhor, quero cancelar a visita",
+      "esperado": {
+        "eventos_ausentes": [
+          "AgendamentoCancelado"
+        ]
+      }
+    },
+    "Sim, pode cancelar"
+  ],
+  "esperado": {
+    "intencao": "compra",
+    "proxima_acao": "agendar_visita",
+    "eventos": [
+      {
+        "tipo": "AgendamentoCriado",
+        "payload": {
+          "tipo": "visita_imovel"
+        }
+      },
+      {
+        "tipo": "AgendamentoRemarcado",
+        "payload": {
+          "tipo": "visita_imovel"
+        }
+      },
+      {
+        "tipo": "AgendamentoCancelado",
+        "payload": {
+          "tipo": "visita_imovel"
+        }
+      }
+    ],
+    "contagem_eventos": {
+      "AgendamentoCriado": 1,
+      "AgendamentoRemarcado": 1,
+      "AgendamentoCancelado": 1
+    }
+  }
+}

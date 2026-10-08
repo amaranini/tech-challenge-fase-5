@@ -1,6 +1,7 @@
 """Porta de entrada única de mensagens de leads (web hoje, WhatsApp depois).
 
 Só persiste a mensagem como PENDENTE e (re)agenda o turno do lead — retorna na hora.
+Se há follow-up pendente, cancela (o lead respondeu) e registra o reengajamento.
 Quem responde é o ProcessarTurno, depois que o lead "para de digitar" (debounce).
 """
 
@@ -13,6 +14,7 @@ from sdr.core.application.ports.repositorios import (
     LeadRepository,
 )
 from sdr.core.application.ports.turnos import AgendadorTurnoPort
+from sdr.core.application.use_cases.followup import ProgramarFollowUps
 from sdr.core.domain.conversa import Conversa, Lead, Mensagem, Papel, StatusMensagem
 from sdr.core.domain.eventos import EventoLead, TipoEvento
 
@@ -37,7 +39,9 @@ class ReceberMensagem:
         conversas: ConversaRepository,
         eventos: LeadEventoRepository,
         agendador: AgendadorTurnoPort,
+        followups: ProgramarFollowUps | None = None,
     ) -> None:
+        self._followups = followups
         self._leads = leads
         self._conversas = conversas
         self._eventos = eventos
@@ -55,6 +59,10 @@ class ReceberMensagem:
         if conversa is None:
             conversa = Conversa.nova(lead)
             await self._conversas.salvar(conversa)
+
+        if self._followups is not None:
+            # O lead falou: follow-ups pendentes caem; se respondia a um, ele reengajou.
+            await self._followups.lead_respondeu(lead, conversa)
 
         recebida = Mensagem.nova(
             conversa.id,

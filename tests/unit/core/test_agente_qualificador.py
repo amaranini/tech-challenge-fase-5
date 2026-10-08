@@ -79,7 +79,8 @@ async def test_roteador_recebe_intencoes_da_vertical_e_indefinida() -> None:
     mensagens, schema, _ = cenario.roteador.chamadas_estruturadas[0]
     assert schema["properties"]["intencao"]["enum"] == ["plano", "avulso", "indefinida"]  # type: ignore[index]
     assert "- plano: quer assinar um plano" in mensagens[0].conteudo
-    assert mensagens[1].conteudo.endswith("Lead: quero treinar")
+    assert "Lead: quero treinar\n\nÚltima fala do lead" in mensagens[1].conteudo
+    assert mensagens[1].conteudo.endswith("«quero treinar»")
 
 
 async def test_fluxo_completo_extrai_pontua_e_pergunta_o_proximo_campo() -> None:
@@ -202,6 +203,10 @@ async def test_roteador_com_saida_invalida_e_tratado_como_indefinida() -> None:
     assert resposta.metadados["roteamento"] == {
         "classificada": "indefinida",
         "confianca": 0.0,
+        "atendimento_humano": None,
+        "quer_agendar": None,
+        "fora_do_alcance": None,
+        "opt_out": None,
         "modelo": "fake-1",
     }
 
@@ -228,7 +233,7 @@ async def test_historico_e_itens_citados_entram_no_contexto_do_especialista() ->
         Mensagem.nova(conversa.id, Papel.LEAD, "quero plano"),
         Mensagem.nova(
             conversa.id,
-            Papel.AGENTE,
+            Papel.ASSISTENTE,
             "Veja o A-1!",
             metadados={"itens_citados": [{"id": "A-1", "resumo": "unidade Centro"}]},
         ),
@@ -300,4 +305,18 @@ async def test_qualificado_nao_pergunta_mais_dados_so_conduz_a_proxima_acao() ->
 
     bloco = _bloco(cenario)
     assert "Sua ÚNICA pergunta nesta mensagem deve conduzir a essa ação" in bloco
+    assert "Próximo dado a descobrir" not in bloco
+
+
+async def test_pedido_fora_do_alcance_tira_o_proximo_dado_do_bloco() -> None:
+    cenario = Cenario(
+        roteador=[{"intencao": "plano", "confianca": 0.9, "fora_do_alcance": True}],
+        extracao=[extracao({"unidade": "Centro"})],
+    )
+
+    await cenario.grafo.responder(entrada(LEAD, "manda um vídeo da academia?"))
+
+    mensagens = cenario.agente.chamadas[0][0]
+    bloco = next(m.conteudo for m in mensagens if "Estado da qualificação" in m.conteudo)
+    assert "NÃO pergunte nenhum dado de qualificação" in bloco
     assert "Próximo dado a descobrir" not in bloco

@@ -8,6 +8,9 @@ import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -20,31 +23,59 @@ from sdr.core.adapters.outbound.agent.agente_qualificador import (
     ConfigQualificacao,
     LLMsPorNo,
 )
+from sdr.core.adapters.outbound.agent.redator_mensagem_ativa import RedatorMensagemAtivaLLM
+from sdr.core.adapters.outbound.agent.redator_resumo import RedatorResumoLLM
 from sdr.core.adapters.outbound.canais.canal_web import CanalWeb
 from sdr.core.adapters.outbound.embeddings.fastembed_adapter import EmbeddingFastembed
+from sdr.core.adapters.outbound.eventos.publicador_asyncio import PublicadorEventosAsyncio
 from sdr.core.adapters.outbound.llm.openai_adapter import LLMOpenAI
+from sdr.core.adapters.outbound.persistence.agenda_postgres import AgendaPostgres
+from sdr.core.adapters.outbound.persistence.crm_postgres import CRMPostgresMock
 from sdr.core.adapters.outbound.persistence.database import criar_engine, criar_fabrica_sessao
+from sdr.core.adapters.outbound.persistence.followups_sql import FollowUpRepositorySql
 from sdr.core.adapters.outbound.persistence.repositorios_conversa_sql import (
     ConversaRepositorySql,
     LeadEventoRepositorySql,
     LeadRepositorySql,
 )
+from sdr.core.adapters.outbound.persistence.resumos_sql import ResumoRepositorySql
 from sdr.core.adapters.outbound.persistence.trava_turno_postgres import TravaTurnoPostgres
 from sdr.core.adapters.outbound.persistence.verificador_saude_postgres import (
     VerificadorSaudePostgres,
 )
+from sdr.core.adapters.outbound.relogio import RelogioSistema
 from sdr.core.adapters.outbound.turnos.agendador_debounce import AgendadorDebounce
 from sdr.core.application.ports.llm import LLMPort
+from sdr.core.application.use_cases.atendimento import (
+    AplicarAcaoAtendimento,
+    AssumirAtendimento,
+    DevolverAtendimento,
+    EnviarMensagemResponsavel,
+    ListarAtendimentos,
+)
+from sdr.core.application.use_cases.conduzir_agendamento import ConduzirAgendamento
+from sdr.core.application.use_cases.consultar_agenda_e_resumo import (
+    ListarAgendamentos,
+    ObterResumo,
+)
 from sdr.core.application.use_cases.consultar_conversas import (
     ListarLeads,
     ObterHistorico,
     RecuperarTurnosPendentes,
 )
+from sdr.core.application.use_cases.followup import (
+    ConfigFollowUp,
+    ExecutarFollowUps,
+    ProgramarFollowUps,
+)
+from sdr.core.application.use_cases.gerar_resumo_handoff import GerarResumoHandoff
 from sdr.core.application.use_cases.obter_lead import ObterLead
 from sdr.core.application.use_cases.processar_turno import ProcessarTurno
 from sdr.core.application.use_cases.receber_mensagem import ReceberMensagem
 from sdr.core.application.use_cases.verificar_saude import VerificarSaude
+from sdr.core.domain.atendimento import HorarioAtendimento
 from sdr.core.domain.conversa import Canal
+from sdr.core.domain.followup import UnidadeTempo
 from sdr.core.vertical import InfraCompartilhada, VerticalMontada, VerticalPack
 from sdr.verticals.imobiliario.pack import PackImobiliario
 
@@ -84,9 +115,38 @@ class Container:
     obter_historico: ObterHistorico
     listar_leads: ListarLeads
     obter_lead: ObterLead
+    obter_resumo: ObterResumo
+    listar_agendamentos: ListarAgendamentos
+    publicador: PublicadorEventosAsyncio
+    gerar_resumo: GerarResumoHandoff | None
+    listar_atendimentos: ListarAtendimentos
+    assumir_atendimento: AssumirAtendimento
+    devolver_atendimento: DevolverAtendimento
+    enviar_mensagem_responsavel: EnviarMensagemResponsavel
+    programar_followups: ProgramarFollowUps | None
+    executar_followups: ExecutarFollowUps | None
+    followups: FollowUpRepositorySql
+    agenda: AgendaPostgres
+    relogio: RelogioSistema
+    settings: Settings
+
+    async def semear_agenda(self) -> int:
+        """Mock: garante os responsáveis da vertical e a grade dos próximos dias úteis."""
+        s = self.settings
+        fuso = ZoneInfo(s.fuso_operacao)
+        return await self.agenda.semear(
+            self.vertical.responsaveis_iniciais,
+            inicio=self.relogio.agora().astimezone(fuso).date(),
+            dias=s.agenda_mock_dias_uteis,
+            hora_inicio=s.agenda_mock_hora_inicio,
+            hora_fim=s.agenda_mock_hora_fim,
+            duracao_min=s.agenda_mock_duracao_min,
+            fuso=fuso,
+        )
 
     async def encerrar(self) -> None:
         await self.agendador.encerrar()
+        await self.publicador.encerrar()
         await self.engine.dispose()
 
 
@@ -116,6 +176,24 @@ def montar_container(settings: Settings | None = None) -> Container:
 
     leads, conversas = LeadRepositorySql(sessoes), ConversaRepositorySql(sessoes)
     eventos = LeadEventoRepositorySql(sessoes)
+    relogio = RelogioSistema()
+    fuso = ZoneInfo(settings.fuso_operacao)
+    agenda = AgendaPostgres(sessoes)
+    horario = HorarioAtendimento.de_texto(
+        settings.atendimento_dias, settings.atendimento_faixas, settings.fuso_operacao
+    )
+    conduzir_agendamento = None
+    if vertical.tipos_agendamento and vertical.regra_atribuicao is not None:
+        conduzir_agendamento = ConduzirAgendamento(
+            agenda,
+            vertical.regra_atribuicao,
+            vertical.tipos_agendamento,
+            relogio,
+            fuso=fuso,
+            antecedencia=timedelta(hours=settings.agenda_antecedencia_horas),
+            janela=timedelta(days=settings.agenda_janela_dias),
+            sugestoes=settings.agenda_sugestoes,
+        )
     llms = LLMsPorNo(
         roteador=criar_llm(settings, settings.llm_model_router or settings.llm_modelo),
         extracao=criar_llm(settings, settings.llm_model_extraction or settings.llm_modelo),
@@ -133,7 +211,76 @@ def montar_container(settings: Settings | None = None) -> Container:
         ),
         ferramentas=vertical.ferramentas,
         max_passos=settings.agente_max_passos,
+        fuso=fuso,
+        agenda=conduzir_agendamento,
+        relogio=relogio,
+        horario=horario,
     )
+
+    # Reações fora do turno: resumo para o responsável + CRM (se a vertical tem template).
+    publicador = PublicadorEventosAsyncio()
+    resumos = ResumoRepositorySql(sessoes)
+    gerar_resumo = None
+    if vertical.template_resumo is not None:
+        gerar_resumo = GerarResumoHandoff(
+            leads,
+            conversas,
+            eventos,
+            resumos=resumos,
+            redator=RedatorResumoLLM(
+                criar_llm(settings, settings.llm_model_summary or settings.llm_modelo), fuso
+            ),
+            crm=CRMPostgresMock(
+                sessoes, Path(settings.crm_mock_log) if settings.crm_mock_log else None
+            ),
+            agenda=agenda,
+            relogio=relogio,
+            template=vertical.template_resumo,
+            intencoes=vertical.intencoes,
+        )
+        publicador.assinar(gerar_resumo.ao_publicar)
+
+    canais = {Canal.WEB: CanalWeb()}
+
+    # Follow-up: programado na conversa, executado pelo worker (python -m sdr.worker).
+    followups = FollowUpRepositorySql(sessoes)
+    programar_followups = executar_followups = None
+    if vertical.cadencias_followup:
+        config_followup = ConfigFollowUp(
+            cadencias=vertical.cadencias_followup,
+            unidade=UnidadeTempo(settings.followup_unidade),
+            horario=horario,
+            respeitar_horario=settings.followup_respeitar_horario,
+            sla_handoff=timedelta(minutes=settings.handoff_sla_minutos),
+            lembrete=vertical.lembrete_agendamento,
+            lembrete_antes=timedelta(hours=settings.followup_lembrete_horas),
+            janela_conversa=timedelta(hours=settings.janela_conversa_horas),
+        )
+        programar_followups = ProgramarFollowUps(
+            followups,
+            leads,
+            conversas,
+            eventos=eventos,
+            agenda=agenda,
+            relogio=relogio,
+            config=config_followup,
+        )
+        publicador.assinar(programar_followups.ao_publicar)
+        executar_followups = ExecutarFollowUps(
+            followups,
+            programar_followups,
+            leads,
+            conversas=conversas,
+            eventos=eventos,
+            agenda=agenda,
+            catalogo=vertical.catalogo,
+            redator=RedatorMensagemAtivaLLM(llms.agente, vertical.persona, fuso),
+            canais=canais,
+            relogio=relogio,
+            persona=vertical.persona,
+            config=config_followup,
+            consulta_para_ficha=vertical.consulta_followup,
+        )
 
     agendador = AgendadorDebounce(settings.debounce_segundos, settings.debounce_max_segundos)
     processar_turno = ProcessarTurno(
@@ -145,8 +292,11 @@ def montar_container(settings: Settings | None = None) -> Container:
         persona=vertical.persona,
         trava=TravaTurnoPostgres(engine),
         agendador=agendador,
-        canais={Canal.WEB: CanalWeb()},
+        canais=canais,
         janela_historico=settings.conversa_janela_historico,
+        publicador=publicador,
+        atendimento=AplicarAcaoAtendimento.com(leads, eventos, relogio, publicador),
+        followups=programar_followups,
     )
     agendador.definir_executor(processar_turno.executar)
 
@@ -157,12 +307,35 @@ def montar_container(settings: Settings | None = None) -> Container:
         vertical=vertical,
         eventos=eventos,
         agendador=agendador,
-        receber_mensagem=ReceberMensagem(leads, conversas, eventos, agendador),
+        receber_mensagem=ReceberMensagem(
+            leads, conversas, eventos, agendador, followups=programar_followups
+        ),
         processar_turno=processar_turno,
         recuperar_turnos=RecuperarTurnosPendentes(conversas, agendador),
         obter_historico=ObterHistorico(leads, conversas),
         listar_leads=ListarLeads(leads),
-        obter_lead=ObterLead(leads, eventos, vertical.intencoes),
+        obter_lead=ObterLead(
+            leads,
+            eventos,
+            vertical.intencoes,
+            agenda=agenda,
+            relogio=relogio,
+            followups=followups,
+        ),
+        obter_resumo=ObterResumo(leads, resumos),
+        listar_agendamentos=ListarAgendamentos(agenda, leads),
+        publicador=publicador,
+        gerar_resumo=gerar_resumo,
+        listar_atendimentos=ListarAtendimentos(leads, relogio),
+        assumir_atendimento=AssumirAtendimento(leads, eventos, relogio, publicador),
+        devolver_atendimento=DevolverAtendimento(leads, eventos, relogio, publicador),
+        enviar_mensagem_responsavel=EnviarMensagemResponsavel(leads, conversas, canais, relogio),
+        programar_followups=programar_followups,
+        executar_followups=executar_followups,
+        followups=followups,
+        agenda=agenda,
+        relogio=relogio,
+        settings=settings,
     )
 
 
@@ -173,6 +346,10 @@ def criar_aplicacao(settings: Settings | None = None) -> FastAPI:
 
     async def aquecer_embedding() -> None:
         await asyncio.to_thread(container.embedding.carregar)
+
+    async def semear_agenda() -> None:
+        if criados := await container.semear_agenda():
+            logging.getLogger(__name__).info("Agenda mock: %d slot(s) novo(s)", criados)
 
     async def recuperar_turnos() -> None:
         if total := await container.recuperar_turnos.executar():
@@ -185,10 +362,18 @@ def criar_aplicacao(settings: Settings | None = None) -> FastAPI:
             obter_historico=lambda: container.obter_historico,
             listar_leads=lambda: container.listar_leads,
             obter_lead=lambda: container.obter_lead,
+            obter_resumo=lambda: container.obter_resumo,
+            listar_agendamentos=lambda: container.listar_agendamentos,
+            listar_atendimentos=lambda: container.listar_atendimentos,
+            assumir_atendimento=lambda: container.assumir_atendimento,
+            devolver_atendimento=lambda: container.devolver_atendimento,
+            enviar_mensagem_responsavel=lambda: container.enviar_mensagem_responsavel,
+            programar_followups=lambda: container.programar_followups,
         ),
         routers=container.vertical.routers,
         ao_iniciar=[
             *([aquecer_embedding] if settings.embedding_carregar_no_inicio else []),
+            semear_agenda,
             recuperar_turnos,
         ],
         ao_encerrar=[container.encerrar],

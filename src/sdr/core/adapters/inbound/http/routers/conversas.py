@@ -41,6 +41,9 @@ class MensagemResposta(BaseModel):
     criada_em: datetime
     status: StatusMensagem
     itens_citados: list[dict[str, Any]] = Field(default_factory=list)
+    responsavel: str | None = Field(
+        default=None, description="Quem da equipe escreveu (papel = responsavel)"
+    )
 
     @classmethod
     def de_dominio(cls, m: Mensagem) -> "MensagemResposta":
@@ -52,6 +55,9 @@ class MensagemResposta(BaseModel):
             criada_em=m.criada_em,
             status=m.status,
             itens_citados=list(citados) if isinstance(citados, list) else [],
+            responsavel=(
+                str(m.metadados.get("responsavel")) if m.metadados.get("responsavel") else None
+            ),
         )
 
 

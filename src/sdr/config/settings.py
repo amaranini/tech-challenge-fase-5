@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     llm_model_router: str | None = None  # roteador de intenção (se vazio, usa llm_modelo)
     llm_model_agent: str | None = None  # especialistas e descoberta
     llm_model_extraction: str | None = None  # extração estruturada da ficha
+    llm_model_summary: str | None = None  # resumo para o responsável (fora do turno)
     llm_temperatura: float | None = 0.4
     llm_timeout_s: float = 40.0
     openai_api_key: SecretStr | None = None
@@ -39,6 +40,34 @@ class Settings(BaseSettings):
 
     router_confianca_min: float = 0.6  # abaixo disso, não troca de intenção
     extracao_janela_mensagens: int = 6  # mensagens recentes lidas por roteador/extração
+
+    # Operação (vale para qualquer vertical)
+    fuso_operacao: str = "America/Sao_Paulo"
+    # Horário de atendimento da equipe (handoff para humano; follow-up respeita no Dia 3D)
+    atendimento_dias: str = "seg-sex"  # ex.: "seg-sex" ou "seg,qua,sex"
+    atendimento_faixas: str = "09:00-18:00"  # ex.: "09:00-12:00,13:00-18:00"
+
+    # Agenda: o que pode ser oferecido ao lead
+    agenda_antecedencia_horas: float = 2.0  # não oferece horário mais próximo que isso
+    agenda_janela_dias: int = 14  # oferece horários até N dias corridos à frente
+    agenda_sugestoes: int = 3  # quantos horários propor por vez
+    # Agenda mock (Postgres): grade de slots gerada no start e no `seed`
+    agenda_mock_dias_uteis: int = 10
+    agenda_mock_hora_inicio: int = 9
+    agenda_mock_hora_fim: int = 20  # último slot termina neste horário
+    agenda_mock_duracao_min: int = 60
+
+    # Follow-up (worker): cadência da vertical em dias (produção) ou minutos (demo)
+    followup_unidade: str = "dias"  # dias | minutos
+    followup_respeitar_horario: bool = True  # fora do horário de atendimento, adia
+    followup_intervalo_segundos: float = 5.0  # worker: espera entre varreduras sem trabalho
+    followup_lote: int = 20  # worker: itens por varredura
+    followup_lembrete_horas: float = 24.0  # lembrete do agendamento, tantas horas antes
+    janela_conversa_horas: float = 24.0  # depois disso, mensagem ativa exige template
+    handoff_sla_minutos: int = 15  # espera máxima na fila (tempo útil) antes do alerta
+
+    # CRM mock (Postgres + log JSON Lines). Produção: HubSpot ou outro CRM.
+    crm_mock_log: str | None = "var/crm_mock.jsonl"
 
 
 @lru_cache

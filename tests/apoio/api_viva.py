@@ -50,7 +50,7 @@ def enviar(lead_id: str, texto: str) -> dict[str, Any]:
     postar(lead_id, texto)
     historico = aguardar_resposta(lead_id)
     resposta = historico["mensagens"][-1]
-    assert resposta["papel"] == "agente"
+    assert resposta["papel"] == "assistente"
     print(f"[lia]  {resposta['texto']}")
     return {"conversa_id": historico["conversa_id"], "resposta": resposta}
 
@@ -60,3 +60,68 @@ def obter_lead(lead_id: str) -> dict[str, Any]:
     resposta.raise_for_status()
     corpo: dict[str, Any] = resposta.json()
     return corpo
+
+
+def historico(lead_id: str) -> dict[str, Any]:
+    resposta = httpx.get(f"{API_URL}/conversas/{lead_id}/mensagens", timeout=30)
+    resposta.raise_for_status()
+    corpo: dict[str, Any] = resposta.json()
+    return corpo
+
+
+def aguardar_resumo(lead_id: str, gatilho: str | None, timeout: float = 120) -> dict[str, Any]:
+    """O resumo é gerado FORA do turno: espera a versão do gatilho esperado aparecer."""
+    limite = time.monotonic() + timeout
+    while time.monotonic() < limite:
+        resposta = httpx.get(f"{API_URL}/leads/{lead_id}/resumo", timeout=30)
+        if resposta.status_code == httpx.codes.OK:
+            corpo: dict[str, Any] = resposta.json()
+            if gatilho is None or corpo["gatilho"] == gatilho:
+                return corpo
+        time.sleep(2)
+    raise AssertionError(f"sem resumo ({gatilho}) para {lead_id} em {timeout}s")
+
+
+def acao_da_equipe(lead_id: str, acao: dict[str, Any]) -> None:
+    """Passo da tela Fila: assumir, responder ou devolver o atendimento."""
+    with httpx.Client(base_url=API_URL, timeout=30) as api:
+        match acao["acao"]:
+            case "assumir":
+                r = api.post(
+                    f"/atendimentos/{lead_id}/assumir", json={"responsavel": acao["responsavel"]}
+                )
+            case "responder":
+                r = api.post(f"/atendimentos/{lead_id}/mensagens", json={"texto": acao["texto"]})
+            case "devolver":
+                r = api.post(f"/atendimentos/{lead_id}/devolver")
+            case "simular_inatividade":
+                antes = _assistente(api.get(f"/conversas/{lead_id}/mensagens").json())
+                r = api.post(f"/demo/leads/{lead_id}/simular-inatividade")
+                if acao.get("espera") == "recusa":
+                    assert r.status_code == httpx.codes.CONFLICT, r.text
+                    print("\n[equipe] simular inatividade → recusado (opt-out)")
+                    return
+                assert r.is_success, r.text
+                print("\n[demo]   simular inatividade")
+                print(f"[lia]  (follow-up) {_aguardar_followup(api, lead_id, antes)}")
+                return
+            case outra:
+                raise ValueError(f"ação desconhecida: {outra}")
+    assert r.is_success, r.text
+    print(f"\n[equipe] {acao['acao']} {acao.get('texto', acao.get('responsavel', ''))}")
+
+
+def _assistente(historico: dict[str, Any]) -> int:
+    return sum(1 for m in historico["mensagens"] if m["papel"] == "assistente")
+
+
+def _aguardar_followup(api: httpx.Client, lead_id: str, antes: int, timeout: float = 120) -> str:
+    """O worker envia o follow-up na próxima varredura: espera a mensagem nova aparecer."""
+    limite = time.monotonic() + timeout
+    while time.monotonic() < limite:
+        historico = api.get(f"/conversas/{lead_id}/mensagens").json()
+        if _assistente(historico) > antes:
+            texto: str = historico["mensagens"][-1]["texto"]
+            return texto
+        time.sleep(2)
+    raise AssertionError(f"o worker não enviou o follow-up em {timeout}s (worker no ar?)")

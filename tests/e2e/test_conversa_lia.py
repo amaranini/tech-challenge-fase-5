@@ -53,7 +53,7 @@ def test_conversa_multiturno_retomada_e_imoveis_reais(lead_id: str) -> None:
         citados = {
             codigo
             for m in historico["mensagens"]
-            if m["papel"] == "agente"
+            if m["papel"] == "assistente"
             for codigo in CODIGO.findall(m["texto"])
         }
         assert citados, "esperava ao menos um código IMV citado"
@@ -71,7 +71,7 @@ def test_mensagens_em_sequencia_rapida_recebem_uma_unica_resposta() -> None:
 
     mensagens = historico["mensagens"]
     papeis = [m["papel"] for m in mensagens]
-    assert papeis == ["lead", "lead", "lead", "agente"], papeis
+    assert papeis == ["lead", "lead", "lead", "assistente"], papeis
     resposta = mensagens[-1]["texto"]
     print(f"[lia]  {resposta}")
     assert re.search(r"(?i)sul", resposta), "a resposta deveria considerar a zona sul"

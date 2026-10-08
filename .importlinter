@@ -10,7 +10,7 @@ include_external_packages = True
 name = Camadas globais (core <- verticals <- bootstrap <- main/cli)
 type = layers
 layers =
-    sdr.main | sdr.cli
+    sdr.main | sdr.cli | sdr.worker
     sdr.bootstrap
     sdr.verticals | sdr.config
     sdr.core
@@ -39,13 +39,15 @@ layers =
 
 # 4. Hexágono de cada fatia da vertical + pack no topo da vertical.
 [importlinter:contract:camadas-vertical-imobiliario]
-name = Vertical imobiliária (pack <- config | catalogo | persona | qualificacao)
+name = Vertical imobiliária (pack <- followup <- agenda <- config | catalogo | persona | qualificacao | resumo)
 type = layers
 containers =
     sdr.verticals.imobiliario
 layers =
     pack
-    config | catalogo | persona | qualificacao
+    followup
+    agenda
+    config | catalogo | persona | qualificacao | resumo
 
 [importlinter:contract:camadas-fatias-imobiliario]
 name = Hexágono das fatias da vertical imobiliária (domain <- application <- adapters)
@@ -55,6 +57,15 @@ containers =
 layers =
     adapters
     application
+    domain
+
+[importlinter:contract:camadas-agenda-imobiliario]
+name = Fatia de agenda imobiliária (domain <- adapters)
+type = layers
+containers =
+    sdr.verticals.imobiliario.agenda
+layers =
+    adapters
     domain
 
 [importlinter:contract:camadas-qualificacao-imobiliario]
@@ -76,6 +87,9 @@ source_modules =
     sdr.verticals.imobiliario.catalogo.domain
     sdr.verticals.imobiliario.catalogo.application
     sdr.verticals.imobiliario.qualificacao.domain
+    sdr.verticals.imobiliario.agenda.domain
+    sdr.verticals.imobiliario.resumo
+    sdr.verticals.imobiliario.followup
 forbidden_modules =
     fastapi
     starlette

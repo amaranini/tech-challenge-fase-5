@@ -1,0 +1,93 @@
+{
+  "nome": "handoff_fila_e_retorno_ia",
+  "descricao": "Aceites 1–3 da Etapa C: lead pede um corretor, a Lia confirma antes, ele entra na fila; na fila manda 'oi?' e a Lia informa que ele aguarda e oferece voltar para a assistente; ele volta (com confirmação) e a conversa segue com o contexto da compra.",
+  "falas": [
+    "Oi, quero comprar um apartamento na zona sul",
+    {
+      "texto": "Quero falar com um corretor",
+      "esperado": {
+        "atendimento_estado": "confirmando_handoff",
+        "eventos": [
+          {
+            "tipo": "HandoffSolicitado",
+            "payload": {
+              "motivo": "pedido_explicito"
+            }
+          }
+        ],
+        "eventos_ausentes": [
+          "HandoffConfirmado"
+        ]
+      }
+    },
+    {
+      "texto": "Sim",
+      "esperado": {
+        "atendimento_estado": "aguardando_humano",
+        "eventos": [
+          {
+            "tipo": "HandoffConfirmado"
+          }
+        ]
+      }
+    },
+    {
+      "texto": "oi?",
+      "esperado": {
+        "atendimento_estado": "aguardando_humano",
+        "eventos": [
+          {
+            "tipo": "MensagemDuranteEspera"
+          }
+        ]
+      }
+    },
+    {
+      "texto": "Quero voltar a falar com a assistente",
+      "esperado": {
+        "atendimento_estado": "confirmando_retorno_ia",
+        "eventos": [
+          {
+            "tipo": "RetornoIASolicitado"
+          }
+        ],
+        "eventos_ausentes": [
+          "RetornoIAConfirmado"
+        ]
+      }
+    },
+    {
+      "texto": "Sim",
+      "esperado": {
+        "atendimento_estado": "atendimento_ia",
+        "eventos": [
+          {
+            "tipo": "RetornoIAConfirmado"
+          }
+        ]
+      }
+    },
+    "Até 800 mil"
+  ],
+  "esperado": {
+    "intencao": "compra",
+    "atendimento_estado": "atendimento_ia",
+    "ficha": {
+      "regiao": {
+        "contem": "sul"
+      },
+      "preco_max": 800000
+    },
+    "resumo": {
+      "secoes": {
+        "necessidades": {
+          "preenchido": true
+        }
+      }
+    },
+    "contagem_eventos": {
+      "HandoffConfirmado": 1,
+      "RetornoIAConfirmado": 1
+    }
+  }
+}

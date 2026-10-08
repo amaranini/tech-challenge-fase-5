@@ -4,8 +4,14 @@
 2. Agrega as mensagens PENDENTES em ordem e executa o agente UMA vez.
 3. Se chegaram mensagens novas enquanto o agente pensava (resposta ainda não enviada),
    descarta a resposta e reprocessa com tudo.
-4. Persiste a resposta, marca o lote como PROCESSADO, grava qualificação/eventos e
-   entrega pelo CanalMensagemPort do canal do lead.
+4. Atendimento humano em curso: a IA fica em silêncio (o lote só é registrado).
+5. Antes de enviar, RECHECA o estado de atendimento: se mudou enquanto o grafo pensava
+   (ex.: um humano assumiu), descarta a resposta. A ação de atendimento do turno (pedir
+   handoff, confirmar, voltar para a IA...) é aplicada com compare-and-set.
+6. Persiste a resposta, marca o lote como PROCESSADO, grava qualificação, negociação de
+   agenda e eventos, e entrega pelo CanalMensagemPort do canal do lead.
+7. Reprograma o follow-up (a cadência conta desta resposta) ou o encerra no opt-out.
+8. Publica os eventos do turno para as reações fora da conversa (PublicadorEventosPort).
 """
 
 import logging
@@ -16,12 +22,18 @@ from uuid import UUID
 from sdr.core.application.ports.agente import AgenteConversacionalPort, EntradaAgente
 from sdr.core.application.ports.canal import CanalMensagemPort
 from sdr.core.application.ports.catalogo import CatalogoPort
+from sdr.core.application.ports.eventos import PublicadorEventosPort
 from sdr.core.application.ports.repositorios import (
     ConversaRepository,
     LeadEventoRepository,
     LeadRepository,
 )
 from sdr.core.application.ports.turnos import AgendadorTurnoPort, TravaTurnoPort
+from sdr.core.application.use_cases.atendimento import (
+    AplicarAcaoAtendimento,
+    AtendimentoAlteradoError,
+)
+from sdr.core.application.use_cases.followup import ProgramarFollowUps
 from sdr.core.domain.agente import Persona, RespostaAgente
 from sdr.core.domain.catalogo import ItemCatalogo
 from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem, Papel, StatusMensagem
@@ -59,7 +71,13 @@ class ProcessarTurno:
         canais: Mapping[Canal, CanalMensagemPort],
         janela_historico: int = JANELA_HISTORICO_PADRAO,
         max_reprocessamentos: int = MAX_REPROCESSAMENTOS,
+        publicador: PublicadorEventosPort | None = None,
+        atendimento: AplicarAcaoAtendimento | None = None,
+        followups: ProgramarFollowUps | None = None,
     ) -> None:
+        self._followups = followups
+        self._publicador = publicador
+        self._atendimento = atendimento
         self._leads = leads
         self._conversas = conversas
         self._agente = agente
@@ -102,6 +120,11 @@ class ProcessarTurno:
                 await self._conversas.marcar_status([m.id for m in lote], StatusMensagem.FALHA)
                 return None
 
+            if resposta.silenciar:
+                logger.info("Lead %s em atendimento humano: IA em silêncio", lead_id)
+                await self._conversas.marcar_status([m.id for m in lote], StatusMensagem.PROCESSADA)
+                return None
+
             novas = [
                 m for m in await self._conversas.pendentes(conversa.id) if m.id not in ids_lote
             ]
@@ -135,19 +158,33 @@ class ProcessarTurno:
         invalidos: list[str],
         fallback: bool,
         reprocessamentos: int,
-    ) -> ResultadoTurno:
+    ) -> ResultadoTurno | None:
+        if not await self._estado_ainda_vale(lead, resposta):
+            await self._conversas.marcar_status([m.id for m in lote], StatusMensagem.PROCESSADA)
+            return None
         metadados = self._metadados(resposta, itens, invalidos, fallback)
         metadados["responde_a"] = [str(m.id) for m in lote]
         enviada = Mensagem.nova(
-            conversa.id, Papel.AGENTE, resposta.texto, metadados=metadados, criada_em=agora_utc()
+            conversa.id,
+            Papel.ASSISTENTE,
+            resposta.texto,
+            metadados=metadados,
+            criada_em=agora_utc(),
         )
         await self._conversas.adicionar_mensagem(enviada)
         await self._conversas.marcar_status([m.id for m in lote], StatusMensagem.PROCESSADA)
         conversa = conversa.tocar(enviada.criada_em)
         await self._conversas.salvar(conversa)
 
-        if resposta.qualificacao is not None and resposta.qualificacao != lead.qualificacao:
-            lead = replace(lead, qualificacao=resposta.qualificacao)
+        atualizado = await self._leads.obter(lead.id) or lead  # atendimento recém-gravado
+        lead = replace(lead, atendimento=atualizado.atendimento, opt_out_em=atualizado.opt_out_em)
+        atualizado = lead
+        if resposta.qualificacao is not None:
+            atualizado = replace(atualizado, qualificacao=resposta.qualificacao)
+        if resposta.agenda is not None:
+            atualizado = replace(atualizado, agenda=resposta.agenda)
+        if atualizado != lead:
+            lead = atualizado
             await self._leads.salvar(lead)
         await self._eventos.registrar(resposta.eventos)
 
@@ -156,6 +193,15 @@ class ProcessarTurno:
             logger.error("Sem CanalMensagemPort para o canal %s", lead.canal)
         else:
             await canal.enviar(lead, enviada)
+        # Follow-up: a cadência recomeça desta resposta (ou acaba, se o lead pediu para parar).
+        if self._followups is not None:
+            if resposta.opt_out:
+                await self._followups.registrar_opt_out(lead, "\n".join(m.texto for m in lote))
+            else:
+                await self._followups.apos_resposta(lead)
+        # Reações aos eventos (ex.: resumo para o responsável) rodam fora do turno.
+        if self._publicador is not None and resposta.eventos:
+            self._publicador.publicar(resposta.eventos)
 
         return ResultadoTurno(
             lead,
@@ -166,6 +212,28 @@ class ProcessarTurno:
             resposta.campos_faltantes,
             reprocessamentos,
         )
+
+    async def _estado_ainda_vale(self, lead: Lead, resposta: RespostaAgente) -> bool:
+        """Recheca o atendimento antes de enviar e aplica a ação do turno (compare-and-set).
+        False = algo mudou no meio (ex.: humano assumiu): a resposta é descartada."""
+        esperado = lead.atendimento_atual.estado
+        atual = await self._leads.obter(lead.id)
+        if atual is None or atual.atendimento_atual.estado is not esperado:
+            logger.warning(
+                "Atendimento do lead %s mudou durante o turno (%s → %s): resposta descartada",
+                lead.id,
+                esperado.value,
+                atual.atendimento_atual.estado.value if atual else "?",
+            )
+            return False
+        if resposta.acao_atendimento is None or self._atendimento is None:
+            return True
+        try:
+            await self._atendimento.executar(lead.id, resposta.acao_atendimento, esperado)
+        except AtendimentoAlteradoError:
+            logger.warning("Atendimento do lead %s mudou ao aplicar a ação do turno", lead.id)
+            return False
+        return True
 
     # ------------------------------------------------------------------ nada fora da base
     async def _responder_sem_inventar(

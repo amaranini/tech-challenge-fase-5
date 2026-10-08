@@ -6,9 +6,13 @@ import re
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from uuid import UUID
+from datetime import date, datetime, time, timedelta
+from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 from sdr.core.application.ports.agente import EntradaAgente
+from sdr.core.application.ports.crm import RegistroCRM
+from sdr.core.application.ports.followup import MensagemAtiva, PedidoMensagemAtiva
 from sdr.core.application.ports.llm import (
     ChamadaFerramenta,
     DefinicaoFerramenta,
@@ -17,7 +21,16 @@ from sdr.core.application.ports.llm import (
     RespostaLLM,
 )
 from sdr.core.application.ports.repositorios import ResumoLead
+from sdr.core.domain.agenda import (
+    Agendamento,
+    PedidoReserva,
+    Responsavel,
+    Slot,
+    SlotIndisponivelError,
+    StatusAgendamento,
+)
 from sdr.core.domain.agente import RespostaAgente
+from sdr.core.domain.atendimento import Atendimento, EstadoAtendimento
 from sdr.core.domain.catalogo import (
     ConsultaCatalogo,
     ConsultaInvalidaError,
@@ -26,6 +39,15 @@ from sdr.core.domain.catalogo import (
 )
 from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem, StatusMensagem
 from sdr.core.domain.eventos import EventoLead
+from sdr.core.domain.followup import FollowUp, StatusFollowUp, TipoFollowUp
+from sdr.core.domain.resumo import (
+    AfirmacaoChecada,
+    FatosResumo,
+    FonteAfirmacao,
+    RascunhoResumo,
+    Resumo,
+    TemplateResumo,
+)
 
 DIMENSAO_FAKE = 64
 
@@ -134,6 +156,8 @@ def item(id_: str, titulo: str = "Item") -> ItemCatalogo:
 
 
 class LeadRepositoryFake:
+    """`salvar` não mexe no atendimento (como o repositório SQL): só `salvar_atendimento`."""
+
     def __init__(self) -> None:
         self.leads: dict[UUID, Lead] = {}
 
@@ -151,10 +175,38 @@ class LeadRepositoryFake:
         )
 
     async def salvar(self, lead: Lead) -> None:
-        self.leads[lead.id] = lead
+        anterior = self.leads.get(lead.id)
+        if anterior is None:
+            self.leads[lead.id] = lead
+            return
+        self.leads[lead.id] = replace(
+            lead, atendimento=anterior.atendimento, opt_out_em=anterior.opt_out_em
+        )
 
     async def listar(self, canal: Canal | None, limite: int) -> list[ResumoLead]:
         return [ResumoLead(ld, 0, None) for ld in self.leads.values() if canal in (None, ld.canal)]
+
+    async def salvar_atendimento(
+        self, atendimento: Atendimento, esperado: EstadoAtendimento
+    ) -> bool:
+        lead = self.leads.get(atendimento.lead_id)
+        if lead is None or lead.atendimento_atual.estado is not esperado:
+            return False
+        self.leads[lead.id] = replace(lead, atendimento=atendimento)
+        return True
+
+    async def registrar_opt_out(self, lead_id: UUID, momento: datetime) -> None:
+        lead = self.leads[lead_id]
+        if lead.opt_out_em is None:
+            self.leads[lead_id] = replace(lead, opt_out_em=momento)
+
+    async def listar_por_atendimento(
+        self, estados: Sequence[EstadoAtendimento], limite: int = 100
+    ) -> list[Lead]:
+        na_fila = [ld for ld in self.leads.values() if ld.atendimento_atual.estado in estados]
+        return sorted(na_fila, key=lambda ld: ld.atendimento_atual.na_fila_desde or ld.criado_em)[
+            :limite
+        ]
 
 
 class ConversaRepositoryFake:
@@ -257,6 +309,7 @@ class TravaFake:
 class CanalFake:
     def __init__(self) -> None:
         self.enviadas: list[tuple[Lead, Mensagem]] = []
+        self.templates: list[tuple[Lead, str, dict[str, str]]] = []
 
     async def enviar(self, lead: Lead, mensagem: Mensagem) -> None:
         self.enviadas.append((lead, mensagem))
@@ -264,4 +317,294 @@ class CanalFake:
     async def enviar_template(
         self, lead: Lead, template: str, variaveis: Mapping[str, str]
     ) -> None:
-        raise AssertionError("template não esperado")
+        self.templates.append((lead, template, dict(variaveis)))
+
+
+# ---------------------------------------------------------------- agenda
+
+FUSO_SP = ZoneInfo("America/Sao_Paulo")
+
+
+class RelogioFake:
+    def __init__(self, momento: datetime) -> None:
+        self.momento = momento
+
+    def agora(self) -> datetime:
+        return self.momento
+
+    def avancar(self, **delta: float) -> None:
+        self.momento += timedelta(**delta)
+
+
+def grade(
+    responsaveis: Sequence[Responsavel],
+    dias: Sequence[date],
+    horas: Sequence[int] = (9, 10, 11, 14, 15, 16, 18, 19),
+    fuso: ZoneInfo = FUSO_SP,
+) -> list[Slot]:
+    return [
+        Slot(
+            uuid4(),
+            r.id,
+            datetime.combine(d, time(h), fuso),
+            datetime.combine(d, time(h), fuso) + timedelta(hours=1),
+        )
+        for d in dias
+        for r in responsaveis
+        for h in horas
+    ]
+
+
+class AgendaFake:
+    """AgendaPort em memória, com a mesma semântica do mock em Postgres."""
+
+    def __init__(self, responsaveis: Sequence[Responsavel], slots: Sequence[Slot]) -> None:
+        self.responsaveis = {r.id: r for r in responsaveis}
+        self.slots = {s.id: s for s in slots}
+        self.ocupados: dict[UUID, UUID | None] = {}  # slot → agendamento (None = externo)
+        self.agendamentos: dict[UUID, Agendamento] = {}
+        self.por_chave: dict[str, UUID] = {}
+        self.chamadas: list[str] = []
+
+    def ocupar_por_fora(self, slot_id: UUID) -> None:
+        """Outro lead (ou compromisso externo) toma o slot."""
+        self.ocupados[slot_id] = None
+
+    async def listar_responsaveis(self) -> list[Responsavel]:
+        return list(self.responsaveis.values())
+
+    async def listar_disponibilidade(
+        self, responsavel_ids: Sequence[UUID], inicio: datetime, fim: datetime
+    ) -> list[Slot]:
+        return sorted(
+            (
+                s
+                for s in self.slots.values()
+                if s.responsavel_id in responsavel_ids
+                and inicio <= s.inicio < fim
+                and s.id not in self.ocupados
+            ),
+            key=lambda s: s.inicio,
+        )
+
+    def _ocupar(self, slot_id: UUID, agendamento_id: UUID) -> Slot:
+        if slot_id in self.ocupados or slot_id not in self.slots:
+            raise SlotIndisponivelError(str(slot_id))
+        self.ocupados[slot_id] = agendamento_id
+        return self.slots[slot_id]
+
+    async def reservar(self, pedido: PedidoReserva) -> Agendamento:
+        self.chamadas.append("reservar")
+        if pedido.chave_idempotencia in self.por_chave:
+            return self.agendamentos[self.por_chave[pedido.chave_idempotencia]]
+        novo_id = uuid4()
+        slot = self._ocupar(pedido.slot_id, novo_id)
+        agendamento = Agendamento(
+            id=novo_id,
+            lead_id=pedido.lead_id,
+            responsavel=self.responsaveis[slot.responsavel_id],
+            slot_id=slot.id,
+            inicio=slot.inicio,
+            fim=slot.fim,
+            tipo=pedido.tipo,
+            modalidade=pedido.modalidade,
+            status=StatusAgendamento.ATIVO,
+            criado_em=slot.inicio,
+            itens=pedido.itens,
+        )
+        self.agendamentos[novo_id] = agendamento
+        self.por_chave[pedido.chave_idempotencia] = novo_id
+        return agendamento
+
+    async def remarcar(
+        self, agendamento_id: UUID, novo_slot_id: UUID, modalidade: str
+    ) -> Agendamento:
+        self.chamadas.append("remarcar")
+        atual = self.agendamentos[agendamento_id]
+        if atual.slot_id != novo_slot_id:
+            slot = self._ocupar(novo_slot_id, agendamento_id)
+            self.ocupados.pop(atual.slot_id, None)
+            atual = replace(
+                atual,
+                slot_id=slot.id,
+                inicio=slot.inicio,
+                fim=slot.fim,
+                responsavel=self.responsaveis[slot.responsavel_id],
+            )
+        atual = replace(atual, modalidade=modalidade)
+        self.agendamentos[agendamento_id] = atual
+        return atual
+
+    async def cancelar(self, agendamento_id: UUID) -> Agendamento:
+        self.chamadas.append("cancelar")
+        atual = self.agendamentos[agendamento_id]
+        if atual.status is not StatusAgendamento.CANCELADO:
+            self.ocupados.pop(atual.slot_id, None)
+            atual = replace(atual, status=StatusAgendamento.CANCELADO)
+            self.agendamentos[agendamento_id] = atual
+        return atual
+
+    async def listar_agendamentos(
+        self,
+        *,
+        lead_id: UUID | None = None,
+        a_partir_de: datetime | None = None,
+        status: StatusAgendamento | None = None,
+        limite: int = 100,
+    ) -> list[Agendamento]:
+        return sorted(
+            (
+                a
+                for a in self.agendamentos.values()
+                if (lead_id is None or a.lead_id == lead_id)
+                and (a_partir_de is None or a.fim > a_partir_de)
+                and (status is None or a.status is status)
+            ),
+            key=lambda a: a.inicio,
+        )[:limite]
+
+    async def agendamento_ativo(self, lead_id: UUID, a_partir_de: datetime) -> Agendamento | None:
+        ativos = [
+            a
+            for a in self.agendamentos.values()
+            if a.lead_id == lead_id and a.status is StatusAgendamento.ATIVO and a.fim > a_partir_de
+        ]
+        return min(ativos, key=lambda a: a.inicio) if ativos else None
+
+
+# ---------------------------------------------------------------- resumo / CRM
+
+
+class RedatorRoteirizado:
+    """Redator fake: devolve seções pré-definidas e guarda os fatos recebidos.
+
+    Checagem: por padrão, cada texto é UMA frase sustentada (recomendação); `checagens`
+    sobrescreve por seção."""
+
+    def __init__(
+        self,
+        *rascunhos: Mapping[str, object],
+        checagens: Mapping[str, Sequence[AfirmacaoChecada]] | None = None,
+    ) -> None:
+        self._rascunhos = list(rascunhos)
+        self._checagens = dict(checagens or {})
+        self.fatos: list[FatosResumo] = []
+        self.checados: list[Mapping[str, str]] = []
+
+    async def checar(
+        self, fatos: FatosResumo, textos: Mapping[str, str]
+    ) -> Mapping[str, Sequence[AfirmacaoChecada]]:
+        self.checados.append(dict(textos))
+        return {
+            chave: self._checagens.get(
+                chave, [AfirmacaoChecada(texto, True, FonteAfirmacao.RECOMENDACAO)]
+            )
+            for chave, texto in textos.items()
+        }
+
+    async def redigir(self, fatos: FatosResumo, template: TemplateResumo) -> RascunhoResumo:
+        self.fatos.append(fatos)
+        secoes = self._rascunhos.pop(0) if self._rascunhos else {}
+        return RascunhoResumo(dict(secoes), "fake-1", 100, 50)
+
+
+class ResumoRepositoryFake:
+    def __init__(self) -> None:
+        self.resumos: list[Resumo] = []
+
+    async def salvar(self, resumo: Resumo) -> None:
+        if any(r.lead_id == resumo.lead_id and r.versao == resumo.versao for r in self.resumos):
+            raise AssertionError("versão duplicada")
+        self.resumos.append(resumo)
+
+    async def ultimo(self, lead_id: UUID) -> Resumo | None:
+        do_lead = [r for r in self.resumos if r.lead_id == lead_id]
+        return max(do_lead, key=lambda r: r.versao, default=None)
+
+    async def obter(self, lead_id: UUID, versao: int) -> Resumo | None:
+        return next((r for r in self.resumos if r.lead_id == lead_id and r.versao == versao), None)
+
+    async def versoes(self, lead_id: UUID) -> list[int]:
+        return sorted(r.versao for r in self.resumos if r.lead_id == lead_id)
+
+
+class CRMFake:
+    def __init__(self) -> None:
+        self.registros: dict[UUID, tuple[Lead, Resumo, Agendamento | None]] = {}
+        self.chamadas = 0
+
+    async def registrar(
+        self, lead: Lead, resumo: Resumo, agendamento: Agendamento | None
+    ) -> RegistroCRM:
+        self.chamadas += 1
+        criado = lead.id not in self.registros
+        self.registros[lead.id] = (lead, resumo, agendamento)
+        return RegistroCRM(f"CRM-{lead.id.hex[:4]}", criado, resumo.gerado_em)
+
+
+# ---------------------------------------------------------------- follow-up
+
+
+class FollowUpRepositoryFake:
+    def __init__(self) -> None:
+        self.itens: dict[UUID, FollowUp] = {}
+
+    async def agendar(self, followup: FollowUp) -> None:
+        self.itens[followup.id] = followup
+
+    async def cancelar_pendentes(
+        self, lead_id: UUID, tipos: Sequence[TipoFollowUp], motivo: str
+    ) -> int:
+        alvos = [
+            f
+            for f in self.itens.values()
+            if f.lead_id == lead_id and f.status is StatusFollowUp.PENDENTE and f.tipo in tipos
+        ]
+        for f in alvos:
+            self.itens[f.id] = replace(f, status=StatusFollowUp.CANCELADO, motivo=motivo)
+        return len(alvos)
+
+    async def reservar_vencidos(
+        self, agora: datetime, limite: int, *, travado_ha: float = 600
+    ) -> list[FollowUp]:
+        vencidos = sorted(
+            (
+                f
+                for f in self.itens.values()
+                if f.status is StatusFollowUp.PENDENTE and f.executar_em <= agora
+            ),
+            key=lambda f: f.executar_em,
+        )[:limite]
+        for f in vencidos:
+            self.itens[f.id] = replace(f, status=StatusFollowUp.PROCESSANDO)
+        return vencidos
+
+    async def concluir(self, followup_id: UUID, status: StatusFollowUp, motivo: str | None) -> None:
+        self.itens[followup_id] = replace(self.itens[followup_id], status=status, motivo=motivo)
+
+    async def reagendar(self, followup: FollowUp) -> None:
+        self.itens[followup.id] = replace(followup, status=StatusFollowUp.PENDENTE)
+
+    async def pendentes(self, lead_id: UUID) -> list[FollowUp]:
+        return sorted(
+            (
+                f
+                for f in self.itens.values()
+                if f.lead_id == lead_id and f.status is StatusFollowUp.PENDENTE
+            ),
+            key=lambda f: f.executar_em,
+        )
+
+    def do_lead(self, lead_id: UUID, tipo: TipoFollowUp | None = None) -> list[FollowUp]:
+        return [f for f in self.itens.values() if f.lead_id == lead_id and tipo in (None, f.tipo)]
+
+
+class RedatorMensagemAtivaFake:
+    def __init__(self, *textos: str) -> None:
+        self._textos = list(textos)
+        self.pedidos: list[PedidoMensagemAtiva] = []
+
+    async def redigir(self, pedido: PedidoMensagemAtiva) -> MensagemAtiva:
+        self.pedidos.append(pedido)
+        texto = self._textos.pop(0) if self._textos else "Oi! Tudo bem por aí?"
+        return MensagemAtiva(texto, "fake-1", 10, 10)
