@@ -5,11 +5,16 @@ import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from sdr.core.application.ports.followup import MensagemAtiva, PedidoMensagemAtiva
+from sdr.core.application.ports.followup import (
+    GanchosTemplate,
+    MensagemAtiva,
+    PedidoMensagemAtiva,
+)
 from sdr.core.application.ports.llm import LLMPort, MensagemLLM, PapelLLM
 from sdr.core.domain.agenda import DIAS_SEMANA
 from sdr.core.domain.agente import Persona
 from sdr.core.domain.conversa import Papel
+from sdr.core.domain.template import MAX_CARACTERES_VARIAVEL, TemplateLogico
 
 PROMPT_MENSAGEM_ATIVA = (
     Path(__file__).resolve().parent / "prompts" / "mensagem_ativa_v1.md"
@@ -51,7 +56,7 @@ class RedatorMensagemAtivaLLM:
             linhas.append(pedido.instrucao_adicional)
         return "\n".join(linhas)
 
-    async def redigir(self, pedido: PedidoMensagemAtiva) -> MensagemAtiva:
+    def _conversa(self, pedido: PedidoMensagemAtiva) -> list[MensagemLLM]:
         mensagens = [
             MensagemLLM(
                 PapelLLM.SISTEMA, f"{self._persona.prompt_sistema}\n\n{PROMPT_MENSAGEM_ATIVA}"
@@ -66,9 +71,50 @@ class RedatorMensagemAtivaLLM:
                 quem = m.metadados.get("responsavel") or "pessoa da equipe"
                 mensagens.append(MensagemLLM(PapelLLM.SISTEMA, f"[{quem}, da equipe]: {m.texto}"))
         mensagens.append(MensagemLLM(PapelLLM.SISTEMA, self._bloco(pedido)))
-        resposta = await self._llm.gerar(mensagens)
+        return mensagens
+
+    async def redigir(self, pedido: PedidoMensagemAtiva) -> MensagemAtiva:
+        resposta = await self._llm.gerar(self._conversa(pedido))
         return MensagemAtiva(
             resposta.conteudo.strip() or self._persona.mensagem_fallback,
+            resposta.modelo,
+            resposta.tokens_entrada,
+            resposta.tokens_saida,
+        )
+
+    async def preencher_ganchos(
+        self, pedido: PedidoMensagemAtiva, template: TemplateLogico
+    ) -> GanchosTemplate:
+        """Fora da janela: só as variáveis "gancho" do template (o core valida cada uma)."""
+        ganchos = template.ganchos
+        instrucao = "\n".join(
+            [
+                "[Template — uso interno] Esta mensagem sai por um TEMPLATE aprovado, com "
+                "texto fixo. Você NÃO escreve a mensagem: só o valor de cada variável abaixo.",
+                f"Texto fixo do template: {template.texto_referencia}",
+                "Regras de cada valor: uma linha só, sem quebra de linha, sem tabulação, sem "
+                "markdown, sem repetir o que o texto fixo já diz, e nada que não esteja na "
+                "conversa ou nos dados acima.",
+                *(
+                    f"- {v.nome} (até {v.max_caracteres or MAX_CARACTERES_VARIAVEL} "
+                    f"caracteres): {v.descricao}"
+                    for v in ganchos
+                ),
+            ]
+        )
+        schema = {
+            "type": "object",
+            "properties": {v.nome: {"type": "string"} for v in ganchos},
+            "required": [v.nome for v in ganchos],
+            "additionalProperties": False,
+        }
+        resposta = await self._llm.gerar_estruturado(
+            [*self._conversa(pedido), MensagemLLM(PapelLLM.SISTEMA, instrucao)],
+            schema,
+            "ganchos_template",
+        )
+        return GanchosTemplate(
+            {k: v for k, v in resposta.dados.items() if isinstance(v, str)},
             resposta.modelo,
             resposta.tokens_entrada,
             resposta.tokens_saida,

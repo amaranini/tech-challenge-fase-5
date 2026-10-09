@@ -9,11 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from sdr.core.adapters.outbound.persistence.modelos import (
     ConversaModel,
+    EnvioCanalModel,
     LeadEventoModel,
     LeadModel,
     MensagemModel,
 )
-from sdr.core.application.ports.repositorios import ResumoLead
+from sdr.core.application.ports.repositorios import AtualizacaoEntrega, ResumoLead
 from sdr.core.domain.agenda import NegociacaoAgenda, Operacao, Proposta, Slot
 from sdr.core.domain.atendimento import Atendimento, EstadoAtendimento, MotivoHandoff
 from sdr.core.domain.conversa import (
@@ -23,7 +24,10 @@ from sdr.core.domain.conversa import (
     Mensagem,
     Papel,
     StatusConversa,
+    StatusEntrega,
     StatusMensagem,
+    avancar_entrega,
+    entrega_da_mensagem,
 )
 from sdr.core.domain.eventos import EventoLead, TipoEvento
 from sdr.core.domain.qualificacao import Classificacao, Qualificacao, Score
@@ -162,6 +166,22 @@ def _mensagem(m: MensagemModel) -> Mensagem:
         criada_em=m.criada_em,
         metadados=dict(m.metadados or {}),
         status=StatusMensagem(m.status),
+        id_externo=m.id_externo,
+        entrega=StatusEntrega(m.entrega_status) if m.entrega_status else None,
+    )
+
+
+def _modelo_mensagem(mensagem: Mensagem) -> MensagemModel:
+    return MensagemModel(
+        id=mensagem.id,
+        conversa_id=mensagem.conversa_id,
+        papel=mensagem.papel.value,
+        texto=mensagem.texto,
+        metadados=dict(mensagem.metadados),
+        criada_em=mensagem.criada_em,
+        status=mensagem.status.value,
+        id_externo=mensagem.id_externo,
+        entrega_status=mensagem.entrega.value if mensagem.entrega else None,
     )
 
 
@@ -296,15 +316,41 @@ class ConversaRepositorySql:
 
     async def adicionar_mensagem(self, mensagem: Mensagem) -> None:
         async with self._sessoes.begin() as sessao:
-            sessao.add(
-                MensagemModel(
-                    id=mensagem.id,
-                    conversa_id=mensagem.conversa_id,
-                    papel=mensagem.papel.value,
-                    texto=mensagem.texto,
-                    metadados=dict(mensagem.metadados),
-                    criada_em=mensagem.criada_em,
-                    status=mensagem.status.value,
+            sessao.add(_modelo_mensagem(mensagem))
+
+    async def adicionar_recebida(self, mensagem: Mensagem) -> bool:
+        modelo = _modelo_mensagem(mensagem)
+        valores = {
+            c.key: getattr(modelo, c.key)
+            for c in MensagemModel.__table__.columns
+            if getattr(modelo, c.key) is not None
+        }
+        stmt = (
+            insert(MensagemModel)
+            .values(**valores)
+            .on_conflict_do_nothing(
+                index_elements=[MensagemModel.id_externo],
+                index_where=MensagemModel.id_externo.is_not(None),
+            )
+            .returning(MensagemModel.id)
+        )
+        async with self._sessoes.begin() as sessao:
+            inserida = await sessao.scalar(stmt)
+        return inserida is not None
+
+    async def mensagem_externa_existe(self, id_externo: str) -> bool:
+        async with self._sessoes() as sessao:
+            encontrado = await sessao.scalar(
+                select(MensagemModel.id).where(MensagemModel.id_externo == id_externo).limit(1)
+            )
+        return encontrado is not None
+
+    async def ultima_do_lead(self, conversa_id: UUID) -> datetime | None:
+        async with self._sessoes() as sessao:
+            return await sessao.scalar(
+                select(func.max(MensagemModel.criada_em)).where(
+                    MensagemModel.conversa_id == conversa_id,
+                    MensagemModel.papel == Papel.LEAD.value,
                 )
             )
 
@@ -313,7 +359,11 @@ class ConversaRepositorySql:
     ) -> list[Mensagem]:
         stmt = select(MensagemModel).where(MensagemModel.conversa_id == conversa_id)
         if not incluir_pendentes:
-            stmt = stmt.where(MensagemModel.status != StatusMensagem.PENDENTE.value)
+            stmt = stmt.where(
+                MensagemModel.status.not_in(
+                    [StatusMensagem.PENDENTE.value, StatusMensagem.NAO_ENVIADA.value]
+                )
+            )
         stmt = stmt.order_by(MensagemModel.criada_em.desc(), MensagemModel.id.desc()).limit(limite)
         async with self._sessoes() as sessao:
             modelos = (await sessao.scalars(stmt)).all()
@@ -389,3 +439,82 @@ class LeadEventoRepositorySql:
             EventoLead(m.lead_id, TipoEvento(m.tipo), m.ocorrido_em, dict(m.payload), m.id)
             for m in modelos
         ]
+
+
+class EntregaRepositorySql:
+    """Status de entrega por parte (envios_canal) e o agregado na mensagem."""
+
+    def __init__(self, sessoes: async_sessionmaker[AsyncSession]) -> None:
+        self._sessoes = sessoes
+
+    async def registrar_envio(
+        self, mensagem_id: UUID, ids_externos: Sequence[str], momento: datetime
+    ) -> None:
+        async with self._sessoes.begin() as sessao:
+            if ids_externos:
+                stmt = insert(EnvioCanalModel).values(
+                    [
+                        {
+                            "id_externo": id_externo,
+                            "mensagem_id": mensagem_id,
+                            "parte": parte,
+                            "status": StatusEntrega.ENVIADA.value,
+                            "atualizado_em": momento,
+                        }
+                        for parte, id_externo in enumerate(ids_externos, start=1)
+                    ]
+                )
+                await sessao.execute(stmt.on_conflict_do_nothing())
+            await sessao.execute(
+                update(MensagemModel)
+                .where(MensagemModel.id == mensagem_id, MensagemModel.entrega_status.is_(None))
+                .values(entrega_status=StatusEntrega.ENVIADA.value, entrega_atualizada_em=momento)
+            )
+
+    async def marcar_falha(
+        self, mensagem_id: UUID, erro: str, momento: datetime, *, nao_enviada: bool
+    ) -> None:
+        valores: dict[str, Any] = {
+            "entrega_status": StatusEntrega.FALHOU.value,
+            "entrega_erro": erro[:500],
+            "entrega_atualizada_em": momento,
+        }
+        if nao_enviada:
+            valores["status"] = StatusMensagem.NAO_ENVIADA.value
+        async with self._sessoes.begin() as sessao:
+            await sessao.execute(
+                update(MensagemModel).where(MensagemModel.id == mensagem_id).values(**valores)
+            )
+
+    async def atualizar(
+        self, id_externo: str, status: StatusEntrega, erro: str | None, momento: datetime
+    ) -> AtualizacaoEntrega | None:
+        async with self._sessoes.begin() as sessao:
+            envio = await sessao.get(EnvioCanalModel, id_externo, with_for_update=True)
+            if envio is None:
+                return None
+            mensagem = await sessao.get(MensagemModel, envio.mensagem_id, with_for_update=True)
+            if mensagem is None:
+                return None
+            envio.status = avancar_entrega(StatusEntrega(envio.status), status).value
+            envio.erro = (erro or envio.erro or "")[:500] or None
+            envio.atualizado_em = momento
+            await sessao.flush()
+            partes = (
+                await sessao.scalars(
+                    select(EnvioCanalModel.status).where(
+                        EnvioCanalModel.mensagem_id == envio.mensagem_id
+                    )
+                )
+            ).all()
+            anterior = StatusEntrega(mensagem.entrega_status) if mensagem.entrega_status else None
+            atual = entrega_da_mensagem([StatusEntrega(p) for p in partes])
+            mensagem.entrega_status = atual.value if atual else None
+            mensagem.entrega_atualizada_em = momento
+            if erro:
+                mensagem.entrega_erro = erro[:500]
+            lead_id = await sessao.scalar(
+                select(ConversaModel.lead_id).where(ConversaModel.id == mensagem.conversa_id)
+            )
+        assert lead_id is not None
+        return AtualizacaoEntrega(lead_id, envio.mensagem_id, anterior, atual)

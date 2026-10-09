@@ -13,11 +13,13 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from sdr.config.settings import Settings, obter_settings
 from sdr.core.adapters.inbound.http.app import criar_app
 from sdr.core.adapters.inbound.http.dependencias import Dependencias
+from sdr.core.adapters.inbound.http.routers.whatsapp_twilio import WebhookWhatsApp
+from sdr.core.adapters.logs import instalar_mascara_pii
 from sdr.core.adapters.outbound.agent.agente_qualificador import (
     AgenteQualificador,
     ConfigQualificacao,
@@ -26,6 +28,11 @@ from sdr.core.adapters.outbound.agent.agente_qualificador import (
 from sdr.core.adapters.outbound.agent.redator_mensagem_ativa import RedatorMensagemAtivaLLM
 from sdr.core.adapters.outbound.agent.redator_resumo import RedatorResumoLLM
 from sdr.core.adapters.outbound.canais.canal_web import CanalWeb
+from sdr.core.adapters.outbound.canais.whatsapp_twilio import (
+    CanalWhatsAppTwilio,
+    ConfigTwilio,
+    TemplateProvedor,
+)
 from sdr.core.adapters.outbound.embeddings.fastembed_adapter import EmbeddingFastembed
 from sdr.core.adapters.outbound.eventos.publicador_asyncio import PublicadorEventosAsyncio
 from sdr.core.adapters.outbound.llm.openai_adapter import LLMOpenAI
@@ -35,6 +42,7 @@ from sdr.core.adapters.outbound.persistence.database import criar_engine, criar_
 from sdr.core.adapters.outbound.persistence.followups_sql import FollowUpRepositorySql
 from sdr.core.adapters.outbound.persistence.repositorios_conversa_sql import (
     ConversaRepositorySql,
+    EntregaRepositorySql,
     LeadEventoRepositorySql,
     LeadRepositorySql,
 )
@@ -45,6 +53,7 @@ from sdr.core.adapters.outbound.persistence.verificador_saude_postgres import (
 )
 from sdr.core.adapters.outbound.relogio import RelogioSistema
 from sdr.core.adapters.outbound.turnos.agendador_debounce import AgendadorDebounce
+from sdr.core.application.ports.canal import CanalMensagemPort
 from sdr.core.application.ports.llm import LLMPort
 from sdr.core.application.use_cases.atendimento import (
     AplicarAcaoAtendimento,
@@ -62,6 +71,12 @@ from sdr.core.application.use_cases.consultar_conversas import (
     ListarLeads,
     ObterHistorico,
     RecuperarTurnosPendentes,
+)
+from sdr.core.application.use_cases.documentar_templates import documentar_templates
+from sdr.core.application.use_cases.entregar_mensagem import (
+    AtualizarStatusEntrega,
+    ConfigEntrega,
+    EntregarMensagem,
 )
 from sdr.core.application.use_cases.followup import (
     ConfigFollowUp,
@@ -100,6 +115,87 @@ PROVEDORES_LLM: dict[str, Callable[[Settings, str], LLMPort]] = {
     "openai": _llm_openai,
 }
 
+ROTA_STATUS_WHATSAPP = "/webhooks/whatsapp/twilio/status"
+logger = logging.getLogger(__name__)
+
+
+def _canal_whatsapp(settings: Settings, vertical: VerticalMontada) -> CanalWhatsAppTwilio | None:
+    """Canal WhatsApp (Twilio) se WHATSAPP_PROVEDOR=twilio; confere o mapeamento de templates
+    da operação contra os templates lógicos declarados pela vertical."""
+    provedor = (settings.whatsapp_provedor or "").strip().lower()
+    if not provedor:
+        return None
+    if provedor != "twilio":
+        raise RuntimeError(f"WHATSAPP_PROVEDOR={provedor!r} desconhecido; disponíveis: twilio")
+    token = settings.twilio_auth_token.get_secret_value() if settings.twilio_auth_token else ""
+    if not (settings.twilio_account_sid and token and settings.public_base_url):
+        raise RuntimeError(
+            "WhatsApp (Twilio) exige TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN e PUBLIC_BASE_URL"
+        )
+    templates = {
+        nome: TemplateProvedor(
+            content_sid=str(cfg["content_sid"]),
+            idioma=str(cfg.get("idioma", "pt_BR")),
+            variaveis=tuple(cfg.get("variaveis") or ()),
+        )
+        for nome, cfg in settings.whatsapp_templates.items()
+    }
+    declarados = {t.nome: t for t in vertical.templates}
+    for nome, aprovado in templates.items():
+        if nome not in declarados:
+            logger.warning("WHATSAPP_TEMPLATES: %r não é template lógico da vertical", nome)
+        elif aprovado.variaveis and set(aprovado.variaveis) != set(declarados[nome].ordem):
+            logger.warning(
+                "WHATSAPP_TEMPLATES: %r mapeia %s, mas o template lógico tem %s",
+                nome,
+                list(aprovado.variaveis),
+                list(declarados[nome].ordem),
+            )
+    if faltando := sorted(set(declarados) - set(templates)):
+        logger.info("Templates sem mapeamento (fora da janela não serão enviados): %s", faltando)
+    return CanalWhatsAppTwilio(
+        ConfigTwilio(
+            account_sid=settings.twilio_account_sid,
+            auth_token=token,
+            remetente=settings.twilio_whatsapp_from,
+            status_callback_url=settings.public_base_url.rstrip("/") + ROTA_STATUS_WHATSAPP,
+            limite_caracteres=settings.whatsapp_limite_caracteres,
+            templates=templates,
+        )
+    )
+
+
+def _montar_saida(
+    settings: Settings,
+    vertical: VerticalMontada,
+    sessoes: async_sessionmaker[AsyncSession],
+    *,
+    conversas: ConversaRepositorySql,
+    eventos: LeadEventoRepositorySql,
+    relogio: RelogioSistema,
+) -> tuple[EntregarMensagem, AtualizarStatusEntrega, CanalWhatsAppTwilio | None]:
+    """Saída: cada canal tem seu adapter; a decisão texto livre × template é do core."""
+    fuso = ZoneInfo(settings.fuso_operacao)
+    canais: dict[Canal, CanalMensagemPort] = {Canal.WEB: CanalWeb()}
+    whatsapp = _canal_whatsapp(settings, vertical)
+    if whatsapp is not None:
+        canais[Canal.WHATSAPP] = whatsapp
+    entregas = EntregaRepositorySql(sessoes)
+    entrega = EntregarMensagem(
+        conversas,
+        entregas,
+        eventos,
+        canais,
+        relogio=relogio,
+        config=ConfigEntrega(
+            fuso=fuso,
+            janela_conversa=timedelta(hours=settings.janela_conversa_horas),
+            max_caracteres_variavel=settings.template_variavel_max_caracteres,
+        ),
+    )
+    atualizar_entrega = AtualizarStatusEntrega(entregas, eventos, relogio)
+    return entrega, atualizar_entrega, whatsapp
+
 
 @dataclass
 class Container:
@@ -126,6 +222,10 @@ class Container:
     programar_followups: ProgramarFollowUps | None
     executar_followups: ExecutarFollowUps | None
     followups: FollowUpRepositorySql
+    entrega: EntregarMensagem
+    atualizar_entrega: AtualizarStatusEntrega
+    webhook_whatsapp: WebhookWhatsApp | None
+    whatsapp: CanalWhatsAppTwilio | None
     agenda: AgendaPostgres
     relogio: RelogioSistema
     settings: Settings
@@ -145,6 +245,8 @@ class Container:
         )
 
     async def encerrar(self) -> None:
+        if self.whatsapp is not None:
+            await self.whatsapp.fechar()
         await self.agendador.encerrar()
         await self.publicador.encerrar()
         await self.engine.dispose()
@@ -240,7 +342,9 @@ def montar_container(settings: Settings | None = None) -> Container:
         )
         publicador.assinar(gerar_resumo.ao_publicar)
 
-    canais = {Canal.WEB: CanalWeb()}
+    entrega, atualizar_entrega, whatsapp = _montar_saida(
+        settings, vertical, sessoes, conversas=conversas, eventos=eventos, relogio=relogio
+    )
 
     # Follow-up: programado na conversa, executado pelo worker (python -m sdr.worker).
     followups = FollowUpRepositorySql(sessoes)
@@ -254,7 +358,6 @@ def montar_container(settings: Settings | None = None) -> Container:
             sla_handoff=timedelta(minutes=settings.handoff_sla_minutos),
             lembrete=vertical.lembrete_agendamento,
             lembrete_antes=timedelta(hours=settings.followup_lembrete_horas),
-            janela_conversa=timedelta(hours=settings.janela_conversa_horas),
         )
         programar_followups = ProgramarFollowUps(
             followups,
@@ -275,7 +378,7 @@ def montar_container(settings: Settings | None = None) -> Container:
             agenda=agenda,
             catalogo=vertical.catalogo,
             redator=RedatorMensagemAtivaLLM(llms.agente, vertical.persona, fuso),
-            canais=canais,
+            entrega=entrega,
             relogio=relogio,
             persona=vertical.persona,
             config=config_followup,
@@ -292,13 +395,25 @@ def montar_container(settings: Settings | None = None) -> Container:
         persona=vertical.persona,
         trava=TravaTurnoPostgres(engine),
         agendador=agendador,
-        canais=canais,
+        entrega=entrega,
         janela_historico=settings.conversa_janela_historico,
         publicador=publicador,
         atendimento=AplicarAcaoAtendimento.com(leads, eventos, relogio, publicador),
         followups=programar_followups,
     )
     agendador.definir_executor(processar_turno.executar)
+    receber_mensagem = ReceberMensagem(
+        leads, conversas, eventos, agendador, followups=programar_followups
+    )
+    webhook_whatsapp = None
+    if whatsapp is not None and settings.public_base_url and settings.twilio_auth_token:
+        webhook_whatsapp = WebhookWhatsApp(
+            auth_token=settings.twilio_auth_token.get_secret_value(),
+            url_base_publica=settings.public_base_url,
+            receber_mensagem=receber_mensagem,
+            atualizar_entrega=atualizar_entrega,
+            validar_assinatura=settings.twilio_validar_assinatura,
+        )
 
     return Container(
         engine=engine,
@@ -307,9 +422,7 @@ def montar_container(settings: Settings | None = None) -> Container:
         vertical=vertical,
         eventos=eventos,
         agendador=agendador,
-        receber_mensagem=ReceberMensagem(
-            leads, conversas, eventos, agendador, followups=programar_followups
-        ),
+        receber_mensagem=receber_mensagem,
         processar_turno=processar_turno,
         recuperar_turnos=RecuperarTurnosPendentes(conversas, agendador),
         obter_historico=ObterHistorico(leads, conversas),
@@ -329,10 +442,16 @@ def montar_container(settings: Settings | None = None) -> Container:
         listar_atendimentos=ListarAtendimentos(leads, relogio),
         assumir_atendimento=AssumirAtendimento(leads, eventos, relogio, publicador),
         devolver_atendimento=DevolverAtendimento(leads, eventos, relogio, publicador),
-        enviar_mensagem_responsavel=EnviarMensagemResponsavel(leads, conversas, canais, relogio),
+        enviar_mensagem_responsavel=EnviarMensagemResponsavel(
+            leads, conversas, entrega, vertical.template_resposta_responsavel
+        ),
         programar_followups=programar_followups,
         executar_followups=executar_followups,
         followups=followups,
+        entrega=entrega,
+        atualizar_entrega=atualizar_entrega,
+        webhook_whatsapp=webhook_whatsapp,
+        whatsapp=whatsapp,
         agenda=agenda,
         relogio=relogio,
         settings=settings,
@@ -342,6 +461,7 @@ def montar_container(settings: Settings | None = None) -> Container:
 def criar_aplicacao(settings: Settings | None = None) -> FastAPI:
     settings = settings or obter_settings()
     logging.basicConfig(level=settings.log_level)
+    instalar_mascara_pii()
     container = montar_container(settings)
 
     async def aquecer_embedding() -> None:
@@ -369,6 +489,7 @@ def criar_aplicacao(settings: Settings | None = None) -> FastAPI:
             devolver_atendimento=lambda: container.devolver_atendimento,
             enviar_mensagem_responsavel=lambda: container.enviar_mensagem_responsavel,
             programar_followups=lambda: container.programar_followups,
+            whatsapp=lambda: container.webhook_whatsapp,
         ),
         routers=container.vertical.routers,
         ao_iniciar=[
@@ -377,4 +498,38 @@ def criar_aplicacao(settings: Settings | None = None) -> FastAPI:
             recuperar_turnos,
         ],
         ao_encerrar=[container.encerrar],
+    )
+
+
+def texto_templates_whatsapp(settings: Settings | None = None) -> str:
+    """docs/whatsapp-templates.md da vertical ativa (sem banco: só lê as declarações)."""
+    settings = settings or obter_settings()
+    pack = VERTICAIS[settings.vertical]()
+    montada = pack.montar(
+        InfraCompartilhada(
+            sessoes=criar_fabrica_sessao(criar_engine(settings.database_url)),
+            embedding=EmbeddingFastembed(
+                settings.embedding_modelo, settings.embedding_dimensao, None
+            ),
+        )
+    )
+    usos: dict[str, list[str]] = {}
+    for situacao, cadencia in montada.cadencias_followup.items():
+        for numero, etapa in enumerate(cadencia.etapas, start=1):
+            usos.setdefault(etapa.template.nome, []).append(
+                f"follow-up {situacao.value}, etapa {numero}"
+            )
+    if montada.lembrete_agendamento:
+        usos.setdefault(montada.lembrete_agendamento.template.nome, []).append(
+            "lembrete de agendamento"
+        )
+    if montada.template_resposta_responsavel:
+        usos.setdefault(montada.template_resposta_responsavel.nome, []).append(
+            "resposta da equipe (tela Fila) fora da janela"
+        )
+    return documentar_templates(
+        montada.templates,
+        vertical=pack.nome,
+        usos=usos,
+        max_caracteres=settings.template_variavel_max_caracteres,
     )

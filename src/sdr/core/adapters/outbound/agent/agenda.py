@@ -195,7 +195,10 @@ class _Redacao:
         return " ou ".join(self.tipo.modalidades.values())
 
     def oferecer(self, decisao: Decisao) -> list[str]:
-        linhas = []
+        linhas = [
+            "NADA foi marcado, remarcado nem confirmado neste turno: NUNCA diga que "
+            "confirmou, marcou ou remarcou — só ofereça os horários abaixo."
+        ]
         if self.r.agendamento is not None:
             atual = self.agendamento(self.r.agendamento)
             linhas.append(f"Agendamento atual (o lead quer remarcar): {atual}.")

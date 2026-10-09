@@ -34,6 +34,8 @@ class TipoEvento(StrEnum):
     LEAD_ENCERRADO_INATIVIDADE = "LeadEncerradoPorInatividade"
     LEAD_REENGAJADO = "LeadReengajado"
     LEAD_OPT_OUT = "LeadOptOut"
+    ENVIO_TEMPLATE_INDISPONIVEL = "EnvioTemplateIndisponivel"
+    MENSAGEM_NAO_ENTREGUE = "MensagemNaoEntregue"
 
 
 @dataclass(frozen=True)

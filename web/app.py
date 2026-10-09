@@ -63,6 +63,35 @@ ATENDIMENTO = {
     "confirmando_retorno_ia": "❓ Lia confirmando a volta para a assistente",
 }
 AVATARES = {"lead": "🙂", "assistente": "🏠", "responsavel": "🧑‍💼"}
+CANAIS = {"web": "💻", "whatsapp": "📱"}
+ENTREGA = {
+    "enviada": "✓ enviada",
+    "entregue": "✓✓ entregue",
+    "lida": "✓✓ lida",
+    "falhou": "⚠️ falhou",
+}
+
+
+def rotulo_lead(lead: dict[str, Any]) -> str:
+    """ "📱 Ana (whatsapp:+5511…)" — canal, nome do perfil (se houver) e id."""
+    icone = CANAIS.get(lead.get("canal", "web"), "")
+    nome = f"{lead['nome']} · " if lead.get("nome") else ""
+    return f"{icone} {nome}{lead['lead_id']}"
+
+
+def mostrar_envio(mensagem: dict[str, Any]) -> None:
+    """Como a mensagem saiu: texto livre, template (fora da janela) ou bloqueada; e o
+    status de entrega informado pelo provedor (WhatsApp)."""
+    envio = mensagem.get("envio") or {}
+    notas = []
+    if envio.get("modo") == "template":
+        notas.append(f"📄 template `{envio.get('template')}` (fora da janela de 24h)")
+    elif envio.get("modo") == "bloqueado" or mensagem["status"] == "nao_enviada":
+        st.warning("Não enviada: fora da janela de 24h e sem template aprovado para ela.")
+    if entrega := mensagem.get("entrega"):
+        notas.append(ENTREGA.get(entrega, entrega))
+    if notas:
+        st.caption(" · ".join(notas))
 
 
 def md(texto: object) -> str:
@@ -151,12 +180,17 @@ EVENTOS_POS_QUALIFICACAO: dict[str, Any] = {
     "FollowUpEnviado": lambda p: (
         f"📨 **follow-up enviado** ({p.get('tipo')}"
         + (f", etapa {p.get('etapa')}" if p.get("etapa") else "")
-        + (", requer template" if p.get("requer_template") else "")
+        + (", por template" if p.get("requer_template") else "")
+        + (", falhou" if p.get("entrega") == "falhou" else "")
         + ")"
     ),
     "LeadEncerradoPorInatividade": lambda p: "💤 cadência encerrada por inatividade",
     "LeadReengajado": lambda p: f"🔁 **reengajou** (respondeu ao follow-up {p.get('etapa')})",
     "LeadOptOut": lambda p: "🛑 **opt-out**: pediu para não receber mais mensagens",
+    "EnvioTemplateIndisponivel": lambda p: (
+        f"📄 **template indisponível**, mensagem não enviada ({p.get('motivo')})"
+    ),
+    "MensagemNaoEntregue": lambda p: f"⚠️ **mensagem não entregue** ({p.get('motivo')})",
 }
 
 
@@ -354,7 +388,7 @@ with st.sidebar:
     atual: str = st.session_state.lead_id
     opcoes = ids if atual in ids else [atual, *ids]
     rotulos = {
-        lead["lead_id"]: f"{lead['lead_id']} ({lead['total_mensagens']} msgs)" for lead in leads
+        lead["lead_id"]: f"{rotulo_lead(lead)} ({lead['total_mensagens']} msgs)" for lead in leads
     }
     escolhido = st.radio(
         "Conversas",
@@ -413,7 +447,7 @@ def fila_e_atendimentos(responsavel: str) -> None:
     for item in aguardando:
         lead = item["lead_id"]
         colunas = st.columns([3, 2, 2, 2])
-        colunas[0].markdown(f"**{lead}**")
+        colunas[0].markdown(f"**{rotulo_lead(item)}**")
         colunas[1].markdown(f"esperando há {minutos(item['espera_segundos'])}")
         colunas[2].markdown(f"{item['intencao'] or '—'} · score {item['score'] or '—'}")
         if colunas[3].button("Assumir", key=f"assumir-{lead}") and (
@@ -426,13 +460,15 @@ def fila_e_atendimentos(responsavel: str) -> None:
     for item in em_atendimento:
         lead = item["lead_id"]
         quem = item["atendimento"]["responsavel"]
-        with st.expander(f"{lead} — com {quem}", expanded=True):
+        with st.expander(f"{rotulo_lead(item)} — com {quem}", expanded=True):
             mostrar_resumo(lead, recolhido=False)
             for m in api_get(f"/conversas/{lead}/mensagens")["mensagens"][-12:]:
                 autor = {"lead": "🙂 Lead", "assistente": "🏠 Lia"}.get(
                     m["papel"], f"🧑‍💼 {m.get('responsavel') or 'Equipe'}"
                 )
                 st.markdown(md(f"**{autor}:** {m['texto']}"))
+                if m["papel"] != "lead":
+                    mostrar_envio(m)
             with st.form(f"responder-{lead}", clear_on_submit=True):
                 texto = st.text_area("Responder ao lead", key=f"texto-{lead}")
                 if st.form_submit_button("Enviar") and texto.strip():
@@ -450,14 +486,21 @@ if st.session_state.get("tela") == "fila":
     st.stop()
 
 lead_id: str = st.session_state.lead_id
+do_whatsapp = lead_id.startswith("whatsapp:")
 st.title("🏠 Lia — consultora da imobiliária")
-st.caption(
-    f"Conversando como **{lead_id}** · pode mandar várias mensagens seguidas: a Lia espera "
-    "você terminar e responde ao conjunto · reabra este lead_id para continuar"
-)
+if do_whatsapp:
+    st.caption(
+        f"📱 Conversa do WhatsApp (**{lead_id}**) — só leitura aqui; o lead escreve pelo "
+        "celular e a equipe responde pela tela Fila."
+    )
+else:
+    st.caption(
+        f"Conversando como **{lead_id}** · pode mandar várias mensagens seguidas: a Lia "
+        "espera você terminar e responde ao conjunto · reabra este lead_id para continuar"
+    )
 
 # O envio só registra a mensagem (HTTP 202); a resposta chega pelo polling abaixo.
-if texto := st.chat_input("Escreva como se fosse no WhatsApp…"):
+if not do_whatsapp and (texto := st.chat_input("Escreva como se fosse no WhatsApp…")):
     try:
         api_enviar(lead_id, texto)
     except (RuntimeError, httpx.HTTPError) as erro:
@@ -480,6 +523,8 @@ def conversa(lead_id: str) -> None:
             st.markdown(md(mensagem["texto"]))
             if mensagem["status"] == "falha":
                 st.caption("⚠️ a Lia não conseguiu responder a esta mensagem")
+            if mensagem["papel"] != "lead":
+                mostrar_envio(mensagem)
             mostrar_itens(mensagem.get("itens_citados", []))
     if historico["processando"]:
         with st.chat_message("assistant", avatar="🏠"):

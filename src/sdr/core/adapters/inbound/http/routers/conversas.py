@@ -1,8 +1,9 @@
 """Canal WEB, assíncrono: o POST só registra a mensagem (202) e o turno é processado
 depois do debounce; o front acompanha por polling em GET /conversas/{lead_id}/mensagens.
 
-O `lead_id` público é o identificador do remetente no canal web. O WhatsApp (Dia 4) terá
-seu router de webhook chamando o mesmo ReceberMensagem.
+O `lead_id` público é o identificador do remetente no canal web; leads de outros canais
+aparecem como "<canal>:<remetente>" (ex.: "whatsapp:+5511..."), só para leitura aqui — o
+WhatsApp entra pelo webhook (routers/whatsapp_twilio.py), no mesmo ReceberMensagem.
 """
 
 from datetime import datetime
@@ -16,13 +17,14 @@ from sdr.core.adapters.inbound.http.dependencias import (
     obter_obter_historico,
     obter_receber_mensagem,
 )
+from sdr.core.adapters.inbound.http.lead_publico import identificar
 from sdr.core.application.dto.mensagem_recebida import MensagemRecebida
 from sdr.core.application.use_cases.consultar_conversas import ObterHistorico
 from sdr.core.application.use_cases.receber_mensagem import (
     MensagemInvalidaError,
     ReceberMensagem,
 )
-from sdr.core.domain.conversa import Canal, Mensagem, Papel, StatusMensagem
+from sdr.core.domain.conversa import Canal, Mensagem, Papel, StatusEntrega, StatusMensagem
 
 router = APIRouter(tags=["conversas"])
 
@@ -44,11 +46,24 @@ class MensagemResposta(BaseModel):
     responsavel: str | None = Field(
         default=None, description="Quem da equipe escreveu (papel = responsavel)"
     )
+    envio: dict[str, Any] | None = Field(
+        default=None,
+        description="Saída: modo (texto | template | bloqueado), template e variáveis",
+    )
+    entrega: StatusEntrega | None = Field(
+        default=None, description="Status informado pelo provedor (enviada/entregue/lida/falhou)"
+    )
+    anexos: list[dict[str, Any]] = Field(default_factory=list, description="Do lead")
 
     @classmethod
     def de_dominio(cls, m: Mensagem) -> "MensagemResposta":
         citados = m.metadados.get("itens_citados")
+        envio = m.metadados.get("envio")
+        midias = m.metadados.get("midias")
         return cls(
+            envio=dict(envio) if isinstance(envio, dict) else None,
+            entrega=m.entrega,
+            anexos=[{"tipo": a.get("tipo")} for a in midias] if isinstance(midias, list) else [],
             id=m.id,
             papel=m.papel,
             texto=m.texto,
@@ -99,7 +114,7 @@ async def historico(
     lead_id: Annotated[str, Path(min_length=1, max_length=100)],
     obter: Annotated[ObterHistorico, Depends(obter_obter_historico)],
 ) -> HistoricoResposta:
-    resultado = await obter.executar(Canal.WEB, lead_id)
+    resultado = await obter.executar(*identificar(lead_id))
     return HistoricoResposta(
         lead_id=lead_id,
         conversa_id=resultado.conversa.id if resultado.conversa else None,

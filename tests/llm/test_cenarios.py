@@ -78,7 +78,7 @@ def _conferir_resumo_na_fila(lead_id: str) -> None:
     app.session_state["responsavel_nome"] = "Teste"
     app.run()
     assert not app.exception, [e.value for e in app.exception]
-    [bloco] = [e for e in app.expander if e.label.startswith(f"{lead_id} — com")]
+    [bloco] = [e for e in app.expander if f"{lead_id} — com" in e.label]  # "💻 <id> — com"
     textos = "\n".join(m.value for m in bloco.markdown)
     assert "Resumo do lead para o corretor" in textos, "o resumo não aparece na Fila"
     assert "Necessidades (ficha)" in textos

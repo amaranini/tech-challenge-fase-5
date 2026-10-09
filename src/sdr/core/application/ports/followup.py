@@ -1,6 +1,6 @@
 """Fila de follow-ups (retomadas, lembretes, SLA do handoff) e o redator das mensagens."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
@@ -10,6 +10,7 @@ from sdr.core.domain.agenda import Agendamento
 from sdr.core.domain.catalogo import ItemCatalogo
 from sdr.core.domain.conversa import Lead, Mensagem
 from sdr.core.domain.followup import FollowUp, StatusFollowUp, TipoFollowUp
+from sdr.core.domain.template import TemplateLogico
 
 
 class FollowUpRepository(Protocol):
@@ -63,5 +64,22 @@ class MensagemAtiva:
     tokens_saida: int = 0
 
 
+@dataclass(frozen=True)
+class GanchosTemplate:
+    """Valores BRUTOS das variáveis "gancho" (o core ainda valida cada um)."""
+
+    valores: Mapping[str, str]
+    modelo: str | None = None
+    tokens_entrada: int = 0
+    tokens_saida: int = 0
+
+
 class RedatorMensagemAtivaPort(Protocol):
     async def redigir(self, pedido: PedidoMensagemAtiva) -> MensagemAtiva: ...
+
+    async def preencher_ganchos(
+        self, pedido: PedidoMensagemAtiva, template: TemplateLogico
+    ) -> GanchosTemplate:
+        """Fora da janela: em vez da mensagem livre, só as variáveis "gancho" do template
+        (curtas, numa linha). Falha ou valor ruim ⇒ o core usa o valor padrão."""
+        ...

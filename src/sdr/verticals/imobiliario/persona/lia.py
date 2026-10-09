@@ -30,4 +30,8 @@ def carregar_persona(versao: str = VERSAO_ATUAL) -> Persona:
         mensagem_fallback=(
             "Deixa eu conferir as opções certinho no sistema e já te mando, tá bom?"
         ),
+        aviso_midia=(
+            "Recebi seu anexo, mas por enquanto eu só consigo ler mensagens de texto 😊 "
+            "Pode me escrever o que precisa? Assim eu já te ajudo a encontrar o imóvel."
+        ),
     )

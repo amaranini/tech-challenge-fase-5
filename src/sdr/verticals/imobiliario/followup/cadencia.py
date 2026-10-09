@@ -10,15 +10,23 @@ from collections.abc import Mapping
 from sdr.core.domain.catalogo import ConsultaCatalogo
 from sdr.core.domain.followup import Cadencia, EtapaCadencia, ModeloLembrete, SituacaoLead
 from sdr.verticals.imobiliario.agenda.domain.atribuicao import RegraAtribuicaoImobiliaria
+from sdr.verticals.imobiliario.followup import templates
+from sdr.verticals.imobiliario.followup.templates import (
+    CONVITE_VISITA,
+    ENCERRAMENTO_BUSCA,
+    NOVIDADE_IMOVEL,
+    RETOMADA_BUSCA,
+    RETOMADA_DESCOBERTA,
+    RETOMADA_REGIAO,
+)
 from sdr.verticals.imobiliario.qualificacao.domain.regras import ALUGUEL, COMPRA, INVESTIMENTO
 
-# Templates aprovados no WhatsApp (usados só fora da janela de 24h): nomes estáveis aqui; o
-# conteúdo aprovado na Meta e as variáveis entram com o canal WhatsApp (Dia 4).
+# Fora da janela de 24h do WhatsApp, cada etapa sai pelo seu template lógico (templates.py).
 ENCERRAMENTO = EtapaCadencia(
     7 - 3,
     "Encerrar com educação: dizer que não vai mais incomodar, que entende se agora não é o "
     "momento e que é só chamar quando quiser retomar a busca.",
-    template="imob_encerramento_busca",
+    template=ENCERRAMENTO_BUSCA,
     encerramento=True,
 )
 
@@ -29,12 +37,12 @@ CADENCIAS: dict[SituacaoLead, Cadencia] = {
                 1,
                 "Retomar com leveza: perguntar se ainda está procurando imóvel e se é para "
                 "comprar, alugar ou investir.",
-                template="imob_retomada_descoberta",
+                template=RETOMADA_DESCOBERTA,
             ),
             EtapaCadencia(
                 2,
                 "Oferecer ajuda de novo, com uma pergunta simples sobre a região.",
-                template="imob_retomada_regiao",
+                template=RETOMADA_REGIAO,
             ),
             ENCERRAMENTO,
         )
@@ -46,13 +54,13 @@ CADENCIAS: dict[SituacaoLead, Cadencia] = {
                 "Retomar do ponto onde a conversa parou, lembrando o que a pessoa já contou, "
                 "e trazer o imóvel novo compatível (se houver); seguir com a próxima dúvida "
                 "da busca.",
-                template="imob_retomada_busca",
+                template=RETOMADA_BUSCA,
             ),
             EtapaCadencia(
                 2,
                 "Trazer uma novidade útil (imóvel novo compatível, se houver) e perguntar se "
                 "quer ajustar algum critério.",
-                template="imob_novidade_imovel",
+                template=NOVIDADE_IMOVEL,
             ),
             ENCERRAMENTO,
         )
@@ -63,13 +71,13 @@ CADENCIAS: dict[SituacaoLead, Cadencia] = {
                 1,
                 "Retomar lembrando o que a pessoa procura e convidar para o próximo passo "
                 "(conhecer os imóveis com um corretor ou conversar com o especialista).",
-                template="imob_convite_visita",
+                template=CONVITE_VISITA,
             ),
             EtapaCadencia(
                 2,
                 "Trazer o imóvel novo compatível (se houver) e perguntar se faz sentido "
                 "marcar um horário.",
-                template="imob_novidade_imovel",
+                template=NOVIDADE_IMOVEL,
             ),
             ENCERRAMENTO,
         )
@@ -82,7 +90,7 @@ LEMBRETE_AGENDAMENTO = ModeloLembrete(
         "online ou no escritório — como está nos dados) e perguntar se continua de pé; se "
         "não puder, oferecer remarcar."
     ),
-    template="imob_lembrete_agendamento",
+    template=templates.LEMBRETE_AGENDAMENTO,
 )
 
 

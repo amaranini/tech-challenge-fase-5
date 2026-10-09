@@ -60,7 +60,7 @@ async def test_lead_novo_emite_lead_criado_uma_unica_vez() -> None:
     await cenario.enviar("tudo bem?")
 
     assert [e.tipo for e in cenario.eventos.eventos] == [TipoEvento.LEAD_CRIADO]
-    assert cenario.eventos.eventos[0].payload == {"canal": "web", "remetente_id": "lead-1"}
+    assert cenario.eventos.eventos[0].payload == {"canal": "web"}
 
 
 @pytest.mark.parametrize("texto", ["", "   ", "x" * 4001])

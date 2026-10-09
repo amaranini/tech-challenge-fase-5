@@ -6,7 +6,6 @@ from sdr.core.application.use_cases.consultar_conversas import ListarLeads, Obte
 from sdr.core.application.use_cases.processar_turno import ProcessarTurno
 from sdr.core.application.use_cases.receber_mensagem import ReceberMensagem
 from sdr.core.domain.agente import Persona, RespostaAgente
-from sdr.core.domain.conversa import Canal
 from tests.apoio.fakes import (
     AgendadorFake,
     AgenteRoteirizado,
@@ -16,6 +15,7 @@ from tests.apoio.fakes import (
     LeadEventoRepositoryFake,
     LeadRepositoryFake,
     TravaFake,
+    entrega_fake,
     item,
 )
 from tests.apoio.http import criar_dependencias
@@ -41,7 +41,7 @@ class Api:
             persona=PERSONA,
             trava=TravaFake(),
             agendador=self.agendador,
-            canais={Canal.WEB: CanalFake()},
+            entrega=entrega_fake(conversas, eventos, CanalFake()),
         )
         obter, listar = ObterHistorico(leads, conversas), ListarLeads(leads)
         app = criar_app(

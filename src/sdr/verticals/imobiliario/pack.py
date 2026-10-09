@@ -31,6 +31,7 @@ from sdr.verticals.imobiliario.followup.cadencia import (
     LEMBRETE_AGENDAMENTO,
     ConsultaFollowUpImobiliaria,
 )
+from sdr.verticals.imobiliario.followup.templates import RESPOSTA_EQUIPE
 from sdr.verticals.imobiliario.persona.lia import carregar_persona, carregar_prompt
 from sdr.verticals.imobiliario.qualificacao.adapters.intencoes import definir_intencoes
 from sdr.verticals.imobiliario.qualificacao.domain.regras import RegrasImobiliarias
@@ -94,4 +95,5 @@ class PackImobiliario:
             cadencias_followup=CADENCIAS,
             consulta_followup=ConsultaFollowUpImobiliaria(regra),
             lembrete_agendamento=LEMBRETE_AGENDAMENTO,
+            template_resposta_responsavel=RESPOSTA_EQUIPE,
         )

@@ -1,5 +1,6 @@
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, Request
 
@@ -18,6 +19,9 @@ from sdr.core.application.use_cases.followup import ProgramarFollowUps
 from sdr.core.application.use_cases.obter_lead import ObterLead
 from sdr.core.application.use_cases.receber_mensagem import ReceberMensagem
 from sdr.core.application.use_cases.verificar_saude import VerificarSaude
+
+if TYPE_CHECKING:
+    from sdr.core.adapters.inbound.http.routers.whatsapp_twilio import WebhookWhatsApp
 
 
 @dataclass(frozen=True)
@@ -39,6 +43,7 @@ class Dependencias:
     devolver_atendimento: Callable[[], DevolverAtendimento]
     enviar_mensagem_responsavel: Callable[[], EnviarMensagemResponsavel]
     programar_followups: Callable[[], ProgramarFollowUps | None]
+    whatsapp: "Callable[[], WebhookWhatsApp | None]" = field(default=lambda: None)
 
 
 def obter_dependencias(request: Request) -> Dependencias:

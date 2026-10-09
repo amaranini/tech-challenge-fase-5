@@ -14,6 +14,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -78,11 +79,38 @@ class MensagemModel(Base):
     metadados: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
     criada_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(20), server_default="processada")
+    # Id no provedor do canal (recebida: idempotência do webhook — o provedor reenvia).
+    id_externo: Mapped[str | None] = mapped_column(String(100))
+    # Saída: status de entrega informado pelo provedor (agregado das partes enviadas).
+    entrega_status: Mapped[str | None] = mapped_column(String(20))
+    entrega_erro: Mapped[str | None] = mapped_column(String(500))
+    entrega_atualizada_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         Index("ix_mensagens_conversa_criada", "conversa_id", "criada_em"),
         Index("ix_mensagens_conversa_status", "conversa_id", "status"),
+        Index(
+            "uq_mensagens_id_externo",
+            "id_externo",
+            unique=True,
+            postgresql_where=text("id_externo IS NOT NULL"),
+        ),
     )
+
+
+class EnvioCanalModel(Base):
+    """Cada parte de uma mensagem de saída no provedor (mensagem longa é dividida)."""
+
+    __tablename__ = "envios_canal"
+
+    id_externo: Mapped[str] = mapped_column(String(100), primary_key=True)
+    mensagem_id: Mapped[UUID] = mapped_column(ForeignKey("mensagens.id", ondelete="CASCADE"))
+    parte: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20))
+    erro: Mapped[str | None] = mapped_column(String(500))
+    atualizado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (Index("ix_envios_canal_mensagem", "mensagem_id"),)
 
 
 class LeadEventoModel(Base):

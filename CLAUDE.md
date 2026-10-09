@@ -1,37 +1,41 @@
 # CLAUDE.md — Agente SDR Conversacional (vertical ativa: imobiliário)
 
-## Fase atual: Dia 3 — concluído (tag `dia-3`); próximo: Dia 4
+## Fase atual: Dia 4 — Etapa A
 
 Ao fim de CADA etapa: parar, listar como verificar o critério de aceite e esperar o ok da PO.
-Commits só com ok da PO, um por etapa, na branch `dia-3` (nunca direto na `main`); ao fim
-do dia, tag `dia-3`. Manter core × vertical e o fluxo assíncrono
-(ReceberMensagem → ProcessarTurno).
+Commits só com ok da PO, um por etapa, na branch `dia-4` (nunca direto na `main`); ao fim
+do dia, tag `dia-4`. Manter core × vertical, o fluxo assíncrono
+(ReceberMensagem → ProcessarTurno) e a máquina de estados de atendimento.
 
-Dia 3 em 4 etapas (especificação completa no pedido da PO; resumo):
-- **A — Agendamento:** `Responsavel` + `AgendaPort` (listar_disponibilidade, reservar,
-  remarcar, cancelar) no core; mock em Postgres (responsáveis + slots; seed de 4 — zona sul,
-  zona oeste, locação, investimentos — com slots nos próximos 10 dias úteis; produção =
-  Google Calendar/Outlook). VerticalPack ganha `regra_atribuicao` e `tipos_agendamento`.
-  Nó de agendamento no grafo (proxima_acao agendável): propõe 2–3 horários, entende
-  linguagem natural resolvendo para slots reais em America/Sao_Paulo, SEMPRE confirma antes
-  de reservar, remarca/cancela, reserva idempotente, slot tomado ⇒ alternativas. Eventos
-  AgendamentoCriado/Remarcado/Cancelado. Testes com relógio fake. Aceite: Exemplo 1 agenda
-  com "pode ser quinta à tarde?" (confirmação antes); Exemplo 2 marca reunião com o
-  especialista em investimentos.
-- **B — Resumo para o responsável + CRM:** `GerarResumoHandoff` fora do turno (LeadQualificado,
-  AgendamentoCriado, HandoffConfirmado), seções da vertical, ancorado (sem inventar: "não
-  informado"), versionado; `CRMPort` mock (crm_registros + log JSON); GET /leads/{id}/resumo,
-  GET /agendamentos; painel mostra agendamento e resumo.
-- **C — Máquina de estados de atendimento (handoff humano):** domínio puro com transições
-  explícitas; gate de estado no início do grafo; confirmação obrigatória; HorarioAtendimento
-  (config da operação); autor em cada mensagem (lead | assistente | responsavel); rechecar
-  estado antes de enviar; rotas /atendimentos; tela "Fila" no Streamlit.
-- **D — Follow-up:** worker/ no compose (mesmos use cases via bootstrap), followups_agendados
-  com SKIP LOCKED, cadência da vertical (FOLLOWUP_UNIDADE=dias|minutos), elegibilidade,
-  HandoffSLAExcedido, lembrete 24h, opt-out, LeadReengajado, simular-inatividade.
-- Aceite do dia: aceites das 4 etapas; lint-imports, ruff, mypy, pytest e `pytest -m llm`
-  (inclui Exemplo 3, handoff e retorno para a IA) passam. Commit com tag `dia-3`.
-- NÃO implementar: dashboard, WhatsApp, Langfuse, deploy.
+Dia 4 em 3 etapas (especificação completa no pedido da PO; resumo):
+- **A — Canal WhatsApp (Twilio Sandbox) + templates:** webhook POST /webhooks/whatsapp/twilio
+  (assinatura X-Twilio-Signature com PUBLIC_BASE_URL; idempotência por MessageSid; normaliza
+  para MensagemRecebida canal=whatsapp, remetente E.164 → ReceberMensagem; 200 imediato;
+  lead pelo telefone; mídia ⇒ registra e avisa que só entende texto). Adapter outbound Twilio
+  do CanalMensagemPort (divide mensagens longas, converte para *negrito* do WhatsApp;
+  enviar_template com variáveis nomeadas → numeradas da Content API; template não mapeado ⇒
+  NÃO envia livre: falha + evento EnvioTemplateIndisponivel). Toda saída (Lia, responsável,
+  follow-up, lembrete) pelo canal do lead. Janela de 24h decidida no core (última mensagem
+  do lead): dentro ⇒ texto livre, fora ⇒ template. VerticalPack declara TemplateLogico por
+  etapa de follow-up e lembrete; config da operação mapeia nome lógico → template aprovado;
+  validador de variáveis no core; LLM só preenche variáveis "gancho" (validador + fallback).
+  docs/whatsapp-templates.md para submeter à Meta; web renderiza preview. Callback de status
+  de entrega; telefone mascarado nos logs. Aceite: Exemplo 1 pelo celular no sandbox até o
+  agendamento; mensagens picadas agregadas; handoff com confirmação e resposta do corretor
+  pela Fila chegando no WhatsApp; follow-up em minutos chega no celular.
+- **B — Observabilidade (Langfuse):** transversal nos adapters (callback do LangGraph +
+  wrapper do LLM), sem Langfuse no core; no-op sem chaves. Um trace por turno (session_id =
+  lead_id, user_id = hash do lead, tags canal/vertical/atendimento/intenção/prompts); spans
+  por nó e generations (modelo, tokens, custo, latência), também resumo, follow-up e
+  extração; PII mascarada; trace_id salvo na mensagem/turno.
+- **C — Dashboard (Streamlit multipágina, só via API):** queries/read models no core a partir
+  de lead_eventos e tabelas existentes, filtro por período; páginas Visão geral, Leads
+  (detalhe com conversa, ficha, score, timeline, resumo, agendamentos, follow-ups, link do
+  trace), Fila (espera, SLA excedido, ações), Agenda, Follow-ups; auto-refresh; tema;
+  scripts/seed_demo.py (~40 leads sintéticos em 14 dias, marcados e removíveis).
+- Aceite do dia: aceites das 3 etapas; lint-imports, ruff, mypy, pytest e `pytest -m llm`
+  passam. Commit com tag `dia-4`.
+- NÃO implementar: deploy, guardrails de prompt injection, eval completo.
 
 ## Visão do projeto
 
@@ -71,7 +75,9 @@ src/sdr/
                            atendimento.py (máquina de estados IA × humano com tabela de
                            transições, AcaoAtendimento do turno, HorarioAtendimento),
                            followup.py (cadência, elegibilidade, janela de 24h, SLA em
-                           tempo útil)
+                           tempo útil), template.py (TemplateLogico, VariavelTemplate,
+                           ContextoTemplate, validador e preenchimento com fallback), pii.py
+                           (mascarar telefone/e-mail/CPF)
     application/
       ports/               Protocols: CatalogoPort, EmbeddingPort, VerificadorSaudePort, LLMPort
                            (texto + saída estruturada), AgenteConversacionalPort, Ferramenta,
@@ -94,13 +100,19 @@ src/sdr/
                            AssumirAtendimento, DevolverAtendimento, EnviarMensagemResponsavel,
                            ListarAtendimentos; compare-and-set no estado), followup.py
                            (ProgramarFollowUps — na conversa e assinando eventos;
-                           ExecutarFollowUps — chamado pelo worker)
+                           ExecutarFollowUps — chamado pelo worker), entregar_mensagem.py
+                           (EntregarMensagem: janela de 24h → texto livre × template, falha ⇒
+                           evento; AtualizarStatusEntrega), documentar_templates.py
       dto/                 MensagemRecebida normalizada e agnóstica de canal
-                           (canal, remetente_id, texto, timestamp, metadados)
+                           (canal, remetente_id, texto, timestamp, metadados, id_externo,
+                           nome_remetente, midias)
     adapters/              infraestrutura GENÉRICA, reaproveitada por qualquer vertical
       inbound/http/        app FastAPI (registra routers da vertical), /health, GET /leads,
                            GET /leads/{lead_id} (qualificação; 404 se não existe),
-                           POST /conversas/mensagens (202) e GET /conversas/{lead_id}/mensagens
+                           POST /conversas/mensagens (202) e GET /conversas/{lead_id}/mensagens;
+                           POST /webhooks/whatsapp/twilio (+ /status): assinatura com
+                           PUBLIC_BASE_URL, idempotência por MessageSid; lead_publico.py
+                           (web: "lead-ana"; outros: "whatsapp:+5511...")
       outbound/persistence/  engine async (SQLAlchemy + psycopg 3), Base ORM compartilhado,
                              leads (fichas JSONB + projeções da qualificação), conversas,
                              mensagens, lead_eventos
@@ -113,7 +125,10 @@ src/sdr/
       outbound/persistence/  + followups_sql.py (fila followups_agendados, SKIP LOCKED)
       outbound/relogio.py    RelogioSistema (RelogioPort)
       outbound/turnos/       AgendadorDebounce (asyncio in-process; produção: fila/Redis)
-      outbound/canais/       CanalWeb (resposta já persistida; front faz polling)
+      outbound/canais/       CanalWeb (resposta já persistida; front faz polling; template =
+                             preview) e CanalWhatsAppTwilio (httpx; whatsapp_formato.py:
+                             *negrito*, divisão em 1600, variáveis nomeadas → numeradas)
+      logs.py                FiltroPII nos handlers (inclusive access log do uvicorn)
       outbound/embeddings/   fastembed (ONNX) local multilíngue (ADR 002)
       outbound/llm/          LLMOpenAI (Chat Completions + tool calling); provedor via
                              LLM_PROVIDER, modelo via LLM_MODELO (ADR 004)
@@ -122,7 +137,7 @@ src/sdr/
                              (+ atendimento_humano) → extração → scoring →
                              especialista ⇄ ferramentas | descoberta (ADR 005) | agenda →
                              responder_agenda (ADR 007); LLM por nó; prompts genéricos em
-                             agent/prompts/ (roteador_v2, extracao_v2, agenda_interpretacao_v1,
+                             agent/prompts/ (roteador_v2, extracao_v2, agenda_interpretacao_v2,
                              agendamento_v1, resumo_v1, resumo_checagem_v1, atendimento_v1,
                              atendimento_classificacao_v1); atendimento.py (bloco de fila/horário);
                              agenda.py (interpretação + bloco com
@@ -142,6 +157,8 @@ src/sdr/
       resumo/template.py   TEMPLATE_RESUMO (seções do resumo para o corretor; puro)
       followup/cadencia.py CADENCIAS por situação (D+1, D+3, encerramento D+7) e
                            ConsultaFollowUpImobiliaria (ficha → busca de imóvel novo)
+      followup/templates.py  TemplateLogico de cada etapa, do lembrete e da resposta da
+                           equipe fora da janela (texto para a Meta + regra de cada variável)
       catalogo/            fatia "catálogo", hexagonal:
         domain/            Imovel, CriteriosBusca, ImovelEncontrado
         application/       ports (ImovelRepository, IndiceImoveisPort, InterpretadorConsultaPort)
@@ -160,7 +177,8 @@ src/sdr/
   bootstrap.py             composition root — instancia a infra do core, escolhe a vertical
                            pelo registro VERTICAIS e chama pack.montar(infra)
   main.py                  entrypoint ASGI (uvicorn sdr.main:app)
-  cli.py                   python -m sdr.cli seed — carga inicial do catálogo da vertical
+  cli.py                   python -m sdr.cli seed — carga inicial do catálogo da vertical;
+                           templates-doc — gera docs/whatsapp-templates.md
 web/                       Streamlit: chat + painel (qualificação, atendimento, agendamento,
                            follow-up) + tela "Fila" da equipe (resumo para o corretor,
                            assumir, responder, devolver) — SOMENTE via API HTTP
@@ -191,7 +209,8 @@ docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
     especialista, próxima ação), regras de qualificação e prompt de descoberta. Depois:
     agenda (regra_atribuicao, tipos_agendamento, responsaveis_iniciais), template_resumo e
     follow-up (cadencias_followup — objetivo + template por etapa; lembrete_agendamento;
-    consulta_followup). O core não tem texto de mensagem comercial: só as regras gerais. Sem segunda vertical e sem motor de configuração genérico.
+    consulta_followup) e canal (TemplateLogico nas etapas e no lembrete,
+    template_resposta_responsavel, Persona.aviso_midia). O core não tem texto de mensagem comercial: só as regras gerais. Sem segunda vertical e sem motor de configuração genérico.
   - **Ficha de qualificação:** uma por intenção, em **JSONB** (`{"compra": {...}}`), validada
     campo a campo pelo schema da vertical (Protocol `SchemaFicha`; Pydantic só na vertical).
     Intenção "indefinida" é do core; a vertical nunca a declara.
@@ -240,6 +259,16 @@ docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
     (e gera LeadReengajado se respondia a um follow-up); opt-out encerra tudo.
   - Elegibilidade e SLA (tempo útil) no domínio; cadência e "item novo" na vertical.
   - Fora da janela de 24h: `requer_template` + `enviar_template`.
+- **Canal WhatsApp e templates (ADR 012)**
+  - Webhook só normaliza e chama `ReceberMensagem` (200 na hora); assinatura obrigatória;
+    idempotente por `id_externo`. Lead = (canal, telefone E.164).
+  - Toda saída (IA, equipe, follow-up, lembrete) passa por `EntregarMensagem`, pelo canal
+    do lead. Janela = última mensagem DO LEAD; fora dela só template — sem template ou sem
+    mapeamento ⇒ não envia livre: `nao_enviada` + `EnvioTemplateIndisponivel`.
+  - Template: vertical declara `TemplateLogico`; operação mapeia (`WHATSAPP_TEMPLATES`);
+    core valida TODA variável (fallback = padrão); LLM só nas variáveis gancho.
+  - `docs/whatsapp-templates.md` é gerado (`python -m sdr.cli templates-doc`); teste confere.
+  - Telefone nunca em log nem em evento (FiltroPII; `LeadCriado` sem remetente).
 - **Qualificação (ADR 005)**
   - Regras universais (troca de intenção, merge, faltantes, eventos) no agregado
     `Qualificacao` do domínio; nós do grafo só orquestram. Scoring/critério são da vertical.
@@ -283,6 +312,11 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
 - Agenda: `FUSO_OPERACAO` (America/Sao_Paulo), `AGENDA_ANTECEDENCIA_HORAS` (2),
   `AGENDA_JANELA_DIAS` (14), `AGENDA_SUGESTOES` (3), `AGENDA_MOCK_*` (10 dias úteis, 9h–20h,
   slots de 60 min; ~1 em 4 já ocupado por "outros compromissos").
+- WhatsApp (Twilio Sandbox): `WHATSAPP_PROVEDOR=twilio`, `PUBLIC_BASE_URL` (túnel:
+  `cloudflared tunnel --url http://localhost:8000`), `TWILIO_ACCOUNT_SID/AUTH_TOKEN/
+  WHATSAPP_FROM`, `WHATSAPP_TEMPLATES` (JSON nome lógico → content_sid/variaveis),
+  `TEMPLATE_VARIAVEL_MAX_CARACTERES`. Webhook no Sandbox: `<túnel>/webhooks/whatsapp/twilio`.
+  Passo a passo no README.
 - `make busca q="apê 2 quartos zona sul até 800 mil perto do metrô"` — testa POST /imoveis/busca.
 - Debounce: `DEBOUNCE_SEGUNDOS` (5) e `DEBOUNCE_MAX_SEGUNDOS` (20).
 - Follow-up: `FOLLOWUP_UNIDADE=dias|minutos` (demo), `FOLLOWUP_RESPEITAR_HORARIO`,
@@ -346,7 +380,7 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
 ## Fora de escopo agora
 
 - Segunda vertical e motor de configuração genérico de verticais (YAGNI — ADR 003).
-- Dashboard, WhatsApp/Twilio, Langfuse (Dia 4).
+- Templates aprovados num número próprio (Sandbox só tem os de exemplo do Twilio).
 - Deploy, guardrails/PII, eval (Dia 5).
 - Autenticação da API.
 - Full-text/BM25 na busca, reranker e interpretador via LLM (avaliar no eval do Dia 5).

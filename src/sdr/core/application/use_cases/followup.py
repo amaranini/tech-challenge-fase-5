@@ -17,7 +17,6 @@ from datetime import datetime, timedelta
 from uuid import UUID
 
 from sdr.core.application.ports.agenda import AgendaPort
-from sdr.core.application.ports.canal import CanalMensagemPort
 from sdr.core.application.ports.catalogo import CatalogoPort
 from sdr.core.application.ports.followup import (
     FollowUpRepository,
@@ -31,11 +30,20 @@ from sdr.core.application.ports.repositorios import (
     LeadEventoRepository,
     LeadRepository,
 )
+from sdr.core.application.use_cases.entregar_mensagem import EntregarMensagem
 from sdr.core.domain.agenda import Agendamento
 from sdr.core.domain.agente import Persona
 from sdr.core.domain.atendimento import EstadoAtendimento, HorarioAtendimento
 from sdr.core.domain.catalogo import ConsultaCatalogo, ItemCatalogo
-from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem, Papel, StatusConversa
+from sdr.core.domain.conversa import (
+    Canal,
+    Conversa,
+    Lead,
+    Mensagem,
+    Papel,
+    StatusConversa,
+    StatusEntrega,
+)
 from sdr.core.domain.eventos import EventoLead, TipoEvento
 from sdr.core.domain.followup import (
     Cadencia,
@@ -49,12 +57,12 @@ from sdr.core.domain.followup import (
     UnidadeTempo,
     motivo_inelegivel,
     proxima_checagem_sla,
-    requer_template,
     situacao_do_lead,
     tempo_util,
 )
 from sdr.core.domain.qualificacao import Ficha
 from sdr.core.domain.resumo import itens_citados
+from sdr.core.domain.template import TemplateLogico
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +81,6 @@ class ConfigFollowUp:
     sla_handoff: timedelta = timedelta(minutes=15)
     lembrete: ModeloLembrete | None = None  # da vertical; None = sem lembretes
     lembrete_antes: timedelta = timedelta(hours=24)
-    janela_conversa: timedelta = timedelta(hours=24)  # depois disso: template (WhatsApp)
 
 
 def _evento(
@@ -272,7 +279,7 @@ class ExecutarFollowUps:
         agenda: AgendaPort,
         catalogo: CatalogoPort,
         redator: RedatorMensagemAtivaPort,
-        canais: Mapping[Canal, CanalMensagemPort],
+        entrega: EntregarMensagem,
         relogio: RelogioPort,
         persona: Persona,
         config: ConfigFollowUp,
@@ -286,7 +293,7 @@ class ExecutarFollowUps:
         self._agenda = agenda
         self._catalogo = catalogo
         self._redator = redator
-        self._canais = canais
+        self._entrega = entrega
         self._relogio = relogio
         self._persona = persona
         self._config = config
@@ -358,10 +365,9 @@ class ExecutarFollowUps:
                 conversa,
                 historico,
                 agendamento=agendamento,
-                ultima_do_lead=ultima_do_lead,
             )
         else:
-            await self._retomar(followup, lead, conversa, historico, ultima_do_lead)
+            await self._retomar(followup, lead, conversa, historico)
 
     # ------------------------------------------------------------------ retomada
     async def _retomar(
@@ -370,7 +376,6 @@ class ExecutarFollowUps:
         lead: Lead,
         conversa: Conversa,
         historico: Sequence[Mensagem],
-        ultima_do_lead: datetime | None,
     ) -> None:
         situacao = followup.situacao or situacao_do_lead(lead.qualificacao)
         cadencia = self._config.cadencias.get(situacao)
@@ -379,38 +384,22 @@ class ExecutarFollowUps:
             await self._followups.concluir(followup.id, StatusFollowUp.CANCELADO, "sem_cadencia")
             return
         itens = [] if etapa.encerramento else await self._item_novo(lead, historico)
-        texto, resposta = await self._redigir_sem_inventar(
-            PedidoMensagemAtiva(
-                lead, historico, etapa.objetivo, etapa.encerramento, itens_novos=itens
-            ),
-            itens,
-            historico,
+        pedido = PedidoMensagemAtiva(
+            lead, historico, etapa.objetivo, etapa.encerramento, itens_novos=itens
+        )
+        metadados: dict[str, object] = {
+            "followup": {
+                "tipo": followup.tipo.value,
+                "etapa": followup.etapa,
+                "encerramento": etapa.encerramento,
+            },
+            "prompt_versao": self._persona.versao_prompt,
+        }
+        mensagem, template = await self._montar(
+            lead, conversa, pedido, etapa.template, metadados, itens=itens, historico=historico
         )
         agora = self._relogio.agora()
-        template = requer_template(ultima_do_lead, agora, self._config.janela_conversa)
-        await self._enviar(
-            lead,
-            conversa,
-            texto,
-            {
-                "followup": {
-                    "tipo": followup.tipo.value,
-                    "etapa": followup.etapa,
-                    "encerramento": etapa.encerramento,
-                },
-                "requer_template": template,
-                "template": etapa.template,
-                "itens_citados": [
-                    {"id": i.id, "titulo": i.titulo, "resumo": i.resumo}
-                    for i in itens
-                    if i.id in texto
-                ],
-                "prompt_versao": self._persona.versao_prompt,
-                "modelo": resposta.modelo,
-                "tokens": {"entrada": resposta.tokens_entrada, "saida": resposta.tokens_saida},
-            },
-            template=etapa.template if template else None,
-        )
+        entrega = await self._enviar(lead, conversa, mensagem)
         await self._followups.concluir(followup.id, StatusFollowUp.ENVIADO, None)
         eventos = [
             _evento(
@@ -420,6 +409,7 @@ class ExecutarFollowUps:
                 tipo=followup.tipo.value,
                 etapa=followup.etapa,
                 requer_template=template,
+                entrega=entrega.value,
                 itens=[i.id for i in itens],
             )
         ]
@@ -481,30 +471,22 @@ class ExecutarFollowUps:
         historico: Sequence[Mensagem],
         *,
         agendamento: Agendamento | None,
-        ultima_do_lead: datetime | None,
     ) -> None:
         modelo = self._config.lembrete
         if modelo is None or agendamento is None or str(agendamento.id) != followup.referencia:
             motivo = "sem_modelo_de_lembrete" if modelo is None else "agendamento_mudou"
             await self._followups.concluir(followup.id, StatusFollowUp.CANCELADO, motivo)
             return
-        resposta = await self._redator.redigir(
-            PedidoMensagemAtiva(lead, historico, modelo.objetivo, agendamento=agendamento)
-        )
-        agora = self._relogio.agora()
-        template = requer_template(ultima_do_lead, agora, self._config.janela_conversa)
-        await self._enviar(
+        mensagem, template = await self._montar(
             lead,
             conversa,
-            resposta.texto,
-            {
-                "followup": {"tipo": followup.tipo.value, "agendamento_id": followup.referencia},
-                "requer_template": template,
-                "template": modelo.template,
-                "modelo": resposta.modelo,
-            },
-            template=modelo.template if template else None,
+            PedidoMensagemAtiva(lead, historico, modelo.objetivo, agendamento=agendamento),
+            modelo.template,
+            {"followup": {"tipo": followup.tipo.value, "agendamento_id": followup.referencia}},
+            agendamento=agendamento,
         )
+        agora = self._relogio.agora()
+        entrega = await self._enviar(lead, conversa, mensagem)
         await self._followups.concluir(followup.id, StatusFollowUp.ENVIADO, None)
         await self._eventos.registrar(
             [
@@ -515,6 +497,7 @@ class ExecutarFollowUps:
                     tipo=followup.tipo.value,
                     agendamento_id=followup.referencia,
                     requer_template=template,
+                    entrega=entrega.value,
                 )
             ]
         )
@@ -553,26 +536,57 @@ class ExecutarFollowUps:
         )
 
     # ------------------------------------------------------------------ envio
-    async def _enviar(
+    async def _montar(
         self,
         lead: Lead,
         conversa: Conversa,
-        texto: str,
+        pedido: PedidoMensagemAtiva,
+        template: TemplateLogico,
         metadados: dict[str, object],
         *,
-        template: str | None,
-    ) -> None:
-        """`template`: fora da janela de conversa, envia pelo template da vertical."""
-        momento = self._relogio.agora()
-        mensagem = Mensagem.nova(
-            conversa.id, Papel.ASSISTENTE, texto, metadados=metadados, criada_em=momento
+        itens: Sequence[ItemCatalogo] = (),
+        historico: Sequence[Mensagem] = (),
+        agendamento: Agendamento | None = None,
+    ) -> tuple[Mensagem, bool]:
+        """Dentro da janela: mensagem livre redigida pelo LLM. Fora: template da vertical,
+        com o LLM escrevendo só os ganchos. Devolve (mensagem, foi por template)."""
+        if not await self._entrega.fora_da_janela(conversa):
+            texto, resposta = await self._redigir_sem_inventar(pedido, itens, historico)
+            metadados |= {
+                "requer_template": False,
+                "itens_citados": [
+                    {"id": i.id, "titulo": i.titulo, "resumo": i.resumo}
+                    for i in itens
+                    if i.id in texto
+                ],
+                "modelo": resposta.modelo,
+                "tokens": {"entrada": resposta.tokens_entrada, "saida": resposta.tokens_saida},
+            }
+            return self._entrega.em_texto(conversa, Papel.ASSISTENTE, texto, metadados), False
+        ganchos: Mapping[str, str] = {}
+        if template.ganchos:
+            try:
+                preenchidos = await self._redator.preencher_ganchos(pedido, template)
+                ganchos = preenchidos.valores
+                metadados |= {
+                    "modelo": preenchidos.modelo,
+                    "tokens": {
+                        "entrada": preenchidos.tokens_entrada,
+                        "saida": preenchidos.tokens_saida,
+                    },
+                }
+            except Exception:
+                logger.exception("Ganchos do template %s falharam: valor padrão", template.nome)
+        contexto = self._entrega.contexto(
+            lead, agendamento=agendamento, itens_novos=tuple(itens), ganchos=ganchos
         )
+        metadados["requer_template"] = True
+        mensagem = self._entrega.em_template(
+            conversa, Papel.ASSISTENTE, template, contexto, metadados
+        )
+        return mensagem, True
+
+    async def _enviar(self, lead: Lead, conversa: Conversa, mensagem: Mensagem) -> StatusEntrega:
         await self._conversas.adicionar_mensagem(mensagem)
-        await self._conversas.salvar(conversa.tocar(momento))
-        canal = self._canais.get(lead.canal)
-        if canal is None:
-            logger.error("Sem CanalMensagemPort para o canal %s", lead.canal)
-        elif template:
-            await canal.enviar_template(lead, template, {"texto": texto})
-        else:
-            await canal.enviar(lead, mensagem)
+        await self._conversas.salvar(conversa.tocar(mensagem.criada_em))
+        return await self._entrega.transmitir(lead, mensagem)

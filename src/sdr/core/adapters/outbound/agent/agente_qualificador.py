@@ -108,7 +108,7 @@ PROMPT_ATENDIMENTO = (PASTA_PROMPTS / "atendimento_v1.md").read_text(encoding="u
 PROMPT_LIMITES = (PASTA_PROMPTS / "limites_v1.md").read_text(encoding="utf-8")
 PROMPT_OPT_OUT = (PASTA_PROMPTS / "opt_out_v1.md").read_text(encoding="utf-8")
 PROMPT_EXTRACAO = (PASTA_PROMPTS / "extracao_v2.md").read_text(encoding="utf-8")
-PROMPT_INTERPRETACAO_AGENDA = (PASTA_PROMPTS / "agenda_interpretacao_v1.md").read_text(
+PROMPT_INTERPRETACAO_AGENDA = (PASTA_PROMPTS / "agenda_interpretacao_v2.md").read_text(
     encoding="utf-8"
 )
 PROMPT_AGENDAMENTO = (PASTA_PROMPTS / "agendamento_v1.md").read_text(encoding="utf-8")

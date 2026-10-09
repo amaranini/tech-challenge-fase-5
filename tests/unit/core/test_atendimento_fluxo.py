@@ -44,6 +44,8 @@ from tests.apoio.fakes import (
     LLMRoteirizado,
     RelogioFake,
     TravaFake,
+    entrega_fake,
+    template_teste,
     texto,
 )
 from tests.apoio.http import criar_dependencias
@@ -207,7 +209,7 @@ class Turno:
             persona=PERSONA,
             trava=TravaFake(),
             agendador=AgendadorFake(),
-            canais={Canal.WEB: self.canal},
+            entrega=entrega_fake(self.conversas, self.eventos, self.canal, self.relogio),
             atendimento=AplicarAcaoAtendimento.com(self.leads, self.eventos, self.relogio),
         )
         self.lead = lead
@@ -295,7 +297,10 @@ class Equipe:
                 assumir_atendimento=lambda: AssumirAtendimento(*deps),
                 devolver_atendimento=lambda: DevolverAtendimento(*deps),
                 enviar_mensagem_responsavel=lambda: EnviarMensagemResponsavel(
-                    self.t.leads, self.t.conversas, {Canal.WEB: self.t.canal}, self.t.relogio
+                    self.t.leads,
+                    self.t.conversas,
+                    entrega_fake(self.t.conversas, self.t.eventos, self.t.canal, self.t.relogio),
+                    template_teste("retomada_equipe"),
                 ),
             )
         )
@@ -304,8 +309,15 @@ class Equipe:
         return httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="http://t")
 
 
+def lead_falou(eq: "Equipe", fala: str = "quero falar com uma pessoa") -> None:
+    eq.t.conversas.mensagens.append(
+        Mensagem.nova(eq.t.conversa.id, Papel.LEAD, fala, criada_em=eq.t.relogio.agora())
+    )
+
+
 async def test_fila_assumir_responder_e_devolver_pela_api() -> None:
     eq = Equipe(lead_em(E.AGUARDANDO_HUMANO))
+    lead_falou(eq)
     eq.t.relogio.avancar(minutes=4)
     async with eq.http() as http:
         fila = (await http.get("/atendimentos/fila")).json()
@@ -327,6 +339,7 @@ async def test_fila_assumir_responder_e_devolver_pela_api() -> None:
         )
         assert enviada.status_code == 201
         assert enviada.json()["papel"] == "responsavel"
+        assert enviada.json()["envio"] == "texto"  # dentro da janela de 24h
 
         devolvido = await http.post("/atendimentos/lead-humano/devolver")
         assert devolvido.json()["estado"] == "atendimento_ia"
@@ -361,3 +374,22 @@ async def test_fila_ordenada_por_tempo_de_espera() -> None:
     eq.t.leads.leads[mais_antigo.id] = mais_antigo
     fila = await ListarAtendimentos(eq.t.leads, eq.t.relogio).executar()
     assert [i.lead.remetente_id for i in fila] == ["lead-antigo", "lead-humano"]
+
+
+async def test_resposta_da_equipe_fora_da_janela_sai_por_template() -> None:
+    eq = Equipe(lead_em(E.ATENDIMENTO_HUMANO))
+    lead_falou(eq)
+    eq.t.relogio.avancar(hours=25)
+    async with eq.http() as http:
+        enviada = await http.post(
+            "/atendimentos/lead-humano/mensagens",
+            json={"texto": "Condomínio de R$ 450.", "responsavel": "Rafael"},
+        )
+    assert enviada.json()["envio"] == "template"
+    assert eq.t.canal.enviadas == []  # texto livre não sai fora da janela
+    [(_, nome, variaveis)] = eq.t.canal.templates
+    assert nome == "retomada_equipe"
+    assert variaveis == {"primeiro_nome": "tudo bem", "gancho": "Lembrei de você."}
+    mensagem = eq.t.conversas.mensagens[-1]
+    assert mensagem.texto == "Oi, tudo bem! Lembrei de você. Responda quando puder."
+    assert mensagem.metadados["envio"]["texto_original"] == "Condomínio de R$ 450."  # type: ignore[index]

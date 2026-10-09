@@ -11,8 +11,17 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from sdr.core.application.ports.agente import EntradaAgente
+from sdr.core.application.ports.canal import (
+    FalhaEnvioError,
+    ResultadoEnvio,
+    TemplateIndisponivelError,
+)
 from sdr.core.application.ports.crm import RegistroCRM
-from sdr.core.application.ports.followup import MensagemAtiva, PedidoMensagemAtiva
+from sdr.core.application.ports.followup import (
+    GanchosTemplate,
+    MensagemAtiva,
+    PedidoMensagemAtiva,
+)
 from sdr.core.application.ports.llm import (
     ChamadaFerramenta,
     DefinicaoFerramenta,
@@ -20,7 +29,9 @@ from sdr.core.application.ports.llm import (
     RespostaEstruturada,
     RespostaLLM,
 )
-from sdr.core.application.ports.repositorios import ResumoLead
+from sdr.core.application.ports.relogio import RelogioPort
+from sdr.core.application.ports.repositorios import AtualizacaoEntrega, ResumoLead
+from sdr.core.application.use_cases.entregar_mensagem import ConfigEntrega, EntregarMensagem
 from sdr.core.domain.agenda import (
     Agendamento,
     PedidoReserva,
@@ -37,7 +48,18 @@ from sdr.core.domain.catalogo import (
     ItemCatalogo,
     ResultadoCatalogo,
 )
-from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem, StatusMensagem
+from sdr.core.domain.conversa import (
+    Canal,
+    Conversa,
+    Lead,
+    Mensagem,
+    Papel,
+    StatusEntrega,
+    StatusMensagem,
+    agora,
+    avancar_entrega,
+    entrega_da_mensagem,
+)
 from sdr.core.domain.eventos import EventoLead
 from sdr.core.domain.followup import FollowUp, StatusFollowUp, TipoFollowUp
 from sdr.core.domain.resumo import (
@@ -48,6 +70,7 @@ from sdr.core.domain.resumo import (
     Resumo,
     TemplateResumo,
 )
+from sdr.core.domain.template import CategoriaTemplate, TemplateLogico, VariavelTemplate
 
 DIMENSAO_FAKE = 64
 
@@ -223,15 +246,40 @@ class ConversaRepositoryFake:
     async def adicionar_mensagem(self, mensagem: Mensagem) -> None:
         self.mensagens.append(mensagem)
 
+    async def adicionar_recebida(self, mensagem: Mensagem) -> bool:
+        if mensagem.id_externo and await self.mensagem_externa_existe(mensagem.id_externo):
+            return False
+        self.mensagens.append(mensagem)
+        return True
+
+    async def mensagem_externa_existe(self, id_externo: str) -> bool:
+        return any(m.id_externo == id_externo for m in self.mensagens)
+
+    async def ultima_do_lead(self, conversa_id: UUID) -> datetime | None:
+        return max(
+            (
+                m.criada_em
+                for m in self.mensagens
+                if m.conversa_id == conversa_id and m.papel is Papel.LEAD
+            ),
+            default=None,
+        )
+
     async def ultimas_mensagens(
         self, conversa_id: UUID, limite: int, *, incluir_pendentes: bool = False
     ) -> list[Mensagem]:
+        fora = {StatusMensagem.PENDENTE, StatusMensagem.NAO_ENVIADA}
         return [
             m
             for m in self.mensagens
-            if m.conversa_id == conversa_id
-            and (incluir_pendentes or m.status is not StatusMensagem.PENDENTE)
+            if m.conversa_id == conversa_id and (incluir_pendentes or m.status not in fora)
         ][-limite:]
+
+    def mensagem(self, mensagem_id: UUID) -> Mensagem:
+        return next(m for m in self.mensagens if m.id == mensagem_id)
+
+    def trocar(self, mensagem: Mensagem) -> None:
+        self.mensagens = [mensagem if m.id == mensagem.id else m for m in self.mensagens]
 
     async def pendentes(self, conversa_id: UUID) -> list[Mensagem]:
         return [
@@ -307,17 +355,99 @@ class TravaFake:
 
 
 class CanalFake:
-    def __init__(self) -> None:
+    """Registra o que o core mandou executar. `templates_mapeados`: None = todos."""
+
+    def __init__(self, templates_mapeados: set[str] | None = None, falhar: bool = False) -> None:
         self.enviadas: list[tuple[Lead, Mensagem]] = []
         self.templates: list[tuple[Lead, str, dict[str, str]]] = []
+        self._mapeados = templates_mapeados
+        self._falhar = falhar
+        self._seq = 0
 
-    async def enviar(self, lead: Lead, mensagem: Mensagem) -> None:
+    def _sid(self) -> str:
+        self._seq += 1
+        return f"SM{self._seq:04d}"
+
+    async def enviar_texto(self, lead: Lead, mensagem: Mensagem) -> ResultadoEnvio:
+        if self._falhar:
+            raise FalhaEnvioError("provedor fora do ar")
         self.enviadas.append((lead, mensagem))
+        return ResultadoEnvio((self._sid(),))
 
     async def enviar_template(
-        self, lead: Lead, template: str, variaveis: Mapping[str, str]
+        self,
+        lead: Lead,
+        mensagem: Mensagem,
+        nome_logico: str,
+        variaveis: Mapping[str, str],
+    ) -> ResultadoEnvio:
+        if self._mapeados is not None and nome_logico not in self._mapeados:
+            raise TemplateIndisponivelError(f"{nome_logico} sem mapeamento")
+        self.templates.append((lead, nome_logico, dict(variaveis)))
+        return ResultadoEnvio((self._sid(),))
+
+
+class EntregaRepositoryFake:
+    """Grava o status de entrega direto nas mensagens do ConversaRepositoryFake."""
+
+    def __init__(self, conversas: ConversaRepositoryFake) -> None:
+        self._conversas = conversas
+        self.partes: dict[str, tuple[UUID, StatusEntrega]] = {}
+        self.erros: dict[UUID, str] = {}
+
+    async def registrar_envio(
+        self, mensagem_id: UUID, ids_externos: Sequence[str], momento: datetime
     ) -> None:
-        self.templates.append((lead, template, dict(variaveis)))
+        for id_externo in ids_externos:
+            self.partes[id_externo] = (mensagem_id, StatusEntrega.ENVIADA)
+        m = self._conversas.mensagem(mensagem_id)
+        self._conversas.trocar(replace(m, entrega=m.entrega or StatusEntrega.ENVIADA))
+
+    async def marcar_falha(
+        self, mensagem_id: UUID, erro: str, momento: datetime, *, nao_enviada: bool
+    ) -> None:
+        self.erros[mensagem_id] = erro
+        m = self._conversas.mensagem(mensagem_id)
+        status = StatusMensagem.NAO_ENVIADA if nao_enviada else m.status
+        self._conversas.trocar(replace(m, entrega=StatusEntrega.FALHOU, status=status))
+
+    async def atualizar(
+        self, id_externo: str, status: StatusEntrega, erro: str | None, momento: datetime
+    ) -> AtualizacaoEntrega | None:
+        if id_externo not in self.partes:
+            return None
+        mensagem_id, atual = self.partes[id_externo]
+        self.partes[id_externo] = (mensagem_id, avancar_entrega(atual, status))
+        m = self._conversas.mensagem(mensagem_id)
+        agregado = entrega_da_mensagem(
+            [st for mid, st in self.partes.values() if mid == mensagem_id]
+        )
+        self._conversas.trocar(replace(m, entrega=agregado))
+        conversa = self._conversas.conversas[m.conversa_id]
+        return AtualizacaoEntrega(conversa.lead_id, mensagem_id, m.entrega, agregado)
+
+
+class _RelogioReal:
+    def agora(self) -> datetime:
+        return agora()
+
+
+def entrega_fake(
+    conversas: ConversaRepositoryFake,
+    eventos: "LeadEventoRepositoryFake",
+    canal: CanalFake,
+    relogio: RelogioPort | None = None,
+    *,
+    janela: timedelta = timedelta(hours=24),
+) -> EntregarMensagem:
+    return EntregarMensagem(
+        conversas,
+        EntregaRepositoryFake(conversas),
+        eventos,
+        {Canal.WEB: canal, Canal.WHATSAPP: canal},
+        relogio=relogio or _RelogioReal(),
+        config=ConfigEntrega(fuso=FUSO_SP, janela_conversa=janela),
+    )
 
 
 # ---------------------------------------------------------------- agenda
@@ -608,3 +738,25 @@ class RedatorMensagemAtivaFake:
         self.pedidos.append(pedido)
         texto = self._textos.pop(0) if self._textos else "Oi! Tudo bem por aí?"
         return MensagemAtiva(texto, "fake-1", 10, 10)
+
+    async def preencher_ganchos(
+        self, pedido: PedidoMensagemAtiva, template: TemplateLogico
+    ) -> GanchosTemplate:
+        self.pedidos.append(pedido)
+        texto = self._textos.pop(0) if self._textos else "Lembrei da sua busca."
+        return GanchosTemplate({v.nome: texto for v in template.ganchos}, "fake-1", 5, 5)
+
+
+def template_teste(nome: str) -> TemplateLogico:
+    """Template lógico mínimo: nome do lead (da ficha/contexto) + um gancho (LLM)."""
+    return TemplateLogico(
+        nome,
+        CategoriaTemplate.UTILITY,
+        "Oi, {{primeiro_nome}}! {{gancho}} Responda quando puder.",
+        (
+            VariavelTemplate(
+                "primeiro_nome", "nome", padrao="tudo bem", preencher=lambda c: c.primeiro_nome
+            ),
+            VariavelTemplate("gancho", "frase", padrao="Lembrei de você.", gancho=True),
+        ),
+    )

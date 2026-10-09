@@ -8,8 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel
 
 from sdr.core.adapters.inbound.http.dependencias import obter_programar_followups
+from sdr.core.adapters.inbound.http.lead_publico import identificar
 from sdr.core.application.use_cases.followup import OptOutError, ProgramarFollowUps
-from sdr.core.domain.conversa import Canal
 
 router = APIRouter(prefix="/demo", tags=["demo"])
 
@@ -36,7 +36,7 @@ async def simular_inatividade(
     """Faz de conta que o lead sumiu: o próximo follow-up vence AGORA (ignora o expediente)
     e o worker o envia na próxima varredura."""
     try:
-        followup = await programar.simular_inatividade(Canal.WEB, lead_id)
+        followup = await programar.simular_inatividade(*identificar(lead_id))
     except LookupError:
         raise HTTPException(404, f"lead {lead_id!r} não encontrado") from None
     except OptOutError:

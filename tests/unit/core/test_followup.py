@@ -18,7 +18,15 @@ from sdr.core.domain.agenda import Agendamento, Responsavel, StatusAgendamento
 from sdr.core.domain.agente import Persona, RespostaAgente
 from sdr.core.domain.atendimento import Atendimento, EstadoAtendimento, HorarioAtendimento
 from sdr.core.domain.catalogo import ConsultaCatalogo
-from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem, Papel, StatusMensagem
+from sdr.core.domain.conversa import (
+    Canal,
+    Conversa,
+    Lead,
+    Mensagem,
+    Papel,
+    StatusEntrega,
+    StatusMensagem,
+)
 from sdr.core.domain.eventos import EventoLead, TipoEvento
 from sdr.core.domain.followup import (
     Cadencia,
@@ -53,7 +61,9 @@ from tests.apoio.fakes import (
     RedatorMensagemAtivaFake,
     RelogioFake,
     TravaFake,
+    entrega_fake,
     item,
+    template_teste,
 )
 
 E = EstadoAtendimento
@@ -61,14 +71,16 @@ HORARIO = HorarioAtendimento.de_texto("seg-sex", "09:00-18:00", "America/Sao_Pau
 SEGUNDA_10H = datetime(2026, 10, 5, 10, tzinfo=FUSO_SP)
 CADENCIA = Cadencia(
     (
-        EtapaCadencia(1, "retomar", template="t_retomar"),
-        EtapaCadencia(2, "trazer novidade", template="t_novidade"),
-        EtapaCadencia(4, "encerrar", template="t_encerrar", encerramento=True),
+        EtapaCadencia(1, "retomar", template=template_teste("t_retomar")),
+        EtapaCadencia(2, "trazer novidade", template=template_teste("t_novidade")),
+        EtapaCadencia(4, "encerrar", template=template_teste("t_encerrar"), encerramento=True),
     )
 )
 CADENCIAS = {s: CADENCIA for s in SituacaoLead}
 PERSONA = Persona("Bia", "v1", "PERSONA", padrao_codigo_item=r"\bA-\d+\b")
-LEMBRETE = ModeloLembrete("lembrar da aula e pedir confirmação", template="t_lembrete")
+LEMBRETE = ModeloLembrete(
+    "lembrar da aula e pedir confirmação", template=template_teste("t_lembrete")
+)
 
 
 # ---------------------------------------------------------------- domínio
@@ -162,7 +174,9 @@ def test_situacao_e_unidade() -> None:
     assert UnidadeTempo.MINUTOS.duracao(3) == timedelta(minutes=3)
     assert UnidadeTempo.DIAS.duracao(3) == timedelta(days=3)
     with pytest.raises(ValueError, match="encerramento"):
-        cadencias_validas({SituacaoLead.DESCOBERTA: Cadencia((EtapaCadencia(1, "x", "t"),))})
+        cadencias_validas(
+            {SituacaoLead.DESCOBERTA: Cadencia((EtapaCadencia(1, "x", template_teste("t")),))}
+        )
 
 
 # ---------------------------------------------------------------- casos de uso
@@ -174,6 +188,7 @@ class Cenario:
         *textos: str,
         agora: datetime = SEGUNDA_10H,
         lembrete: ModeloLembrete | None = LEMBRETE,
+        canal: CanalFake | None = None,
     ) -> None:
         self.relogio = RelogioFake(agora)
         self.leads = LeadRepositoryFake()
@@ -181,7 +196,7 @@ class Cenario:
         self.eventos = LeadEventoRepositoryFake()
         self.followups = FollowUpRepositoryFake()
         self.agenda = AgendaFake([], [])
-        self.canal = CanalFake()
+        self.canal = canal or CanalFake()
         self.catalogo = CatalogoFake(item("A-1"), item("A-2"))
         self.redator = RedatorMensagemAtivaFake(*textos)
         config = ConfigFollowUp(cadencias=CADENCIAS, horario=HORARIO, lembrete=lembrete)
@@ -203,7 +218,7 @@ class Cenario:
             agenda=self.agenda,
             catalogo=self.catalogo,
             redator=self.redator,
-            canais={Canal.WEB: self.canal},
+            entrega=entrega_fake(self.conversas, self.eventos, self.canal, self.relogio),
             relogio=self.relogio,
             persona=PERSONA,
             config=config,
@@ -339,16 +354,62 @@ async def test_agendamento_futuro_cancela_a_retomada() -> None:
     assert f.motivo == "tem_agendamento_futuro"
 
 
-async def test_mensagem_fora_da_janela_de_24h_marca_requer_template() -> None:
-    c = Cenario()
+async def test_fora_da_janela_de_24h_sai_so_por_template_com_ganchos_validados() -> None:
+    c = Cenario("Lembrei da\nsua busca.")  # gancho com quebra de linha: o validador recusa
     await c.programar.apos_resposta(c.lead)
     c.relogio.avancar(days=1, hours=1)
     await c.executar.executar()
-    assert c.enviadas()[0].metadados["requer_template"] is True
-    [(_, template, variaveis)] = c.canal.templates  # fora da janela: só por template
-    assert (template, variaveis["texto"]) == ("t_retomar", c.enviadas()[0].texto)  # da cadência
-    assert c.enviadas()[0].metadados["template"] == "t_retomar"
+
+    [enviada] = c.enviadas()
+    assert enviada.metadados["requer_template"] is True
+    assert c.canal.enviadas == []  # nada de texto livre fora da janela
+    [(_, nome, variaveis)] = c.canal.templates
+    assert nome == "t_retomar"  # o template lógico da etapa
+    assert variaveis == {"primeiro_nome": "tudo bem", "gancho": "Lembrei de você."}  # fallbacks
+    assert enviada.texto == "Oi, tudo bem! Lembrei de você. Responda quando puder."
+    assert enviada.metadados["envio"]["fallbacks"] == ["primeiro_nome", "gancho"]  # type: ignore[index]
+    assert enviada.entrega is StatusEntrega.ENVIADA
+
+
+async def test_gancho_valido_do_llm_entra_no_template() -> None:
+    c = Cenario("Ainda pensando no plano do Centro?")
+    await c.programar.apos_resposta(c.lead)
+    c.relogio.avancar(days=2)
+    await c.executar.executar()
+    [(_, _, variaveis)] = c.canal.templates
+    assert variaveis["gancho"] == "Ainda pensando no plano do Centro?"
+
+
+async def test_dentro_da_janela_sai_texto_livre() -> None:
+    c = Cenario("Oi! Ainda quer o plano no Centro?")
+    await c.programar.apos_resposta(c.lead)
+    c.relogio.avancar(hours=23)  # antecipa a etapa 1 para 23h depois da fala do lead
+    c.followups.itens = {
+        k: replace(f, executar_em=c.relogio.agora()) for k, f in c.followups.itens.items()
+    }
+    await c.executar.executar()
+    [(_, mensagem)] = c.canal.enviadas
+    assert mensagem.texto == "Oi! Ainda quer o plano no Centro?"
+    assert c.canal.templates == []
+
+
+async def test_template_sem_mapeamento_no_provedor_nao_envia_e_emite_evento() -> None:
+    c = Cenario()
+    c.canal = CanalFake(templates_mapeados=set())
+    c.executar._entrega = entrega_fake(c.conversas, c.eventos, c.canal, c.relogio)
+    await c.programar.apos_resposta(c.lead)
+    c.relogio.avancar(days=2)
+    await c.executar.executar()
+
+    [enviada] = c.enviadas()
+    assert enviada.status is StatusMensagem.NAO_ENVIADA  # fora da memória do agente
+    assert enviada.entrega is StatusEntrega.FALHOU
     assert c.canal.enviadas == []
+    assert c.canal.templates == []
+    [evento] = [e for e in c.eventos.eventos if e.tipo is TipoEvento.ENVIO_TEMPLATE_INDISPONIVEL]
+    assert evento.payload["template"] == "t_retomar"
+    [enviado] = [e for e in c.eventos.eventos if e.tipo is TipoEvento.FOLLOWUP_ENVIADO]
+    assert enviado.payload["entrega"] == "falhou"
 
 
 async def test_codigo_inventado_pede_correcao_ao_redator() -> None:
@@ -479,7 +540,7 @@ async def test_turno_reprograma_a_cadencia_e_opt_out_encerra() -> None:
         persona=PERSONA,
         trava=TravaFake(),
         agendador=AgendadorFake(),
-        canais={Canal.WEB: c.canal},
+        entrega=entrega_fake(c.conversas, c.eventos, c.canal, c.relogio),
         followups=c.programar,
     )
 

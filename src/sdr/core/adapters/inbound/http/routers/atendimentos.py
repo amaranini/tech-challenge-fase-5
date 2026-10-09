@@ -17,6 +17,7 @@ from sdr.core.adapters.inbound.http.dependencias import (
     obter_enviar_mensagem_responsavel,
     obter_listar_atendimentos,
 )
+from sdr.core.adapters.inbound.http.lead_publico import id_publico, identificar
 from sdr.core.application.use_cases.atendimento import (
     AssumirAtendimento,
     AtendimentoAlteradoError,
@@ -55,6 +56,8 @@ class AtendimentoResposta(BaseModel):
 
 class ItemFilaResposta(BaseModel):
     lead_id: str
+    canal: Canal
+    nome: str | None
     espera_segundos: int
     atendimento: AtendimentoResposta
     intencao: str | None
@@ -65,7 +68,9 @@ class ItemFilaResposta(BaseModel):
         lead = item.lead
         q = lead.qualificacao
         return cls(
-            lead_id=lead.remetente_id,
+            lead_id=id_publico(lead),
+            canal=lead.canal,
+            nome=lead.nome,
             espera_segundos=item.espera_segundos,
             atendimento=AtendimentoResposta.de_dominio(lead.atendimento_atual),
             intencao=q.intencao_atual,
@@ -87,6 +92,8 @@ class MensagemEnviada(BaseModel):
     papel: str
     texto: str
     criada_em: datetime
+    envio: str = Field(description="texto | template (fora da janela) | bloqueado")
+    entrega: str | None = None
 
 
 def _resposta(resultado: ResultadoAtendimento) -> AtendimentoResposta:
@@ -125,7 +132,7 @@ async def assumir(
     caso_de_uso: Annotated[AssumirAtendimento, Depends(obter_assumir_atendimento)],
 ) -> AtendimentoResposta:
     try:
-        return _resposta(await caso_de_uso.executar(Canal.WEB, lead_id, corpo.responsavel))
+        return _resposta(await caso_de_uso.executar(*identificar(lead_id), corpo.responsavel))
     except LeadNaoEncontradoError:
         raise HTTPException(404, f"lead {lead_id!r} não encontrado") from None
     except (TransicaoInvalidaError, AtendimentoAlteradoError) as erro:
@@ -139,7 +146,7 @@ async def devolver(
 ) -> AtendimentoResposta:
     """Devolve a conversa para a IA (que retoma sabendo o que a equipe disse)."""
     try:
-        return _resposta(await caso_de_uso.executar(Canal.WEB, lead_id))
+        return _resposta(await caso_de_uso.executar(*identificar(lead_id)))
     except LeadNaoEncontradoError:
         raise HTTPException(404, f"lead {lead_id!r} não encontrado") from None
     except (TransicaoInvalidaError, AtendimentoAlteradoError) as erro:
@@ -156,9 +163,17 @@ async def responder(
 ) -> MensagemEnviada:
     """O responsável escreve ao lead (sai pelo CanalMensagemPort do canal do lead)."""
     try:
-        m = await caso_de_uso.executar(Canal.WEB, lead_id, corpo.texto, corpo.responsavel)
+        m = await caso_de_uso.executar(*identificar(lead_id), corpo.texto, corpo.responsavel)
     except LeadNaoEncontradoError:
         raise HTTPException(404, f"lead {lead_id!r} não encontrado") from None
     except AtendimentoNaoAssumidoError as erro:
         raise HTTPException(409, str(erro)) from None
-    return MensagemEnviada(id=m.id, papel=m.papel.value, texto=m.texto, criada_em=m.criada_em)
+    envio = m.metadados.get("envio")
+    return MensagemEnviada(
+        id=m.id,
+        papel=m.papel.value,
+        texto=m.texto,
+        criada_em=m.criada_em,
+        envio=str(envio.get("modo")) if isinstance(envio, dict) else "texto",
+        entrega=m.entrega.value if m.entrega else None,
+    )

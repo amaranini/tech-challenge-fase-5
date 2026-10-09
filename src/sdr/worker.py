@@ -15,6 +15,7 @@ import signal
 
 from sdr.bootstrap import montar_container
 from sdr.config.settings import obter_settings
+from sdr.core.adapters.logs import instalar_mascara_pii
 
 logger = logging.getLogger("sdr.worker")
 
@@ -44,6 +45,7 @@ async def rodar(parar: asyncio.Event) -> None:
 
 def main() -> None:
     logging.basicConfig(level=obter_settings().log_level, format="%(asctime)s %(name)s %(message)s")
+    instalar_mascara_pii()
     parar = asyncio.Event()
 
     async def principal() -> None:

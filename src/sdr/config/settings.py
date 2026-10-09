@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Any
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -65,6 +66,20 @@ class Settings(BaseSettings):
     followup_lembrete_horas: float = 24.0  # lembrete do agendamento, tantas horas antes
     janela_conversa_horas: float = 24.0  # depois disso, mensagem ativa exige template
     handoff_sla_minutos: int = 15  # espera máxima na fila (tempo útil) antes do alerta
+
+    # Canal WhatsApp (vazio = desligado; webhook responde 404)
+    whatsapp_provedor: str | None = None  # twilio
+    public_base_url: str | None = None  # URL pública (túnel/proxy): assinatura e callbacks
+    twilio_account_sid: str | None = None
+    twilio_auth_token: SecretStr | None = None
+    twilio_whatsapp_from: str = "whatsapp:+14155238886"  # número do Sandbox
+    twilio_validar_assinatura: bool = True
+    whatsapp_limite_caracteres: int = 1600  # por mensagem; acima disso, divide
+    # Nome lógico (da vertical) → template aprovado no provedor. JSON, ex.:
+    # {"imob_lembrete_agendamento": {"content_sid": "HX...", "idioma": "pt_BR",
+    #   "variaveis": ["primeiro_nome", "compromisso", "com_quem", "quando", "onde"]}}
+    whatsapp_templates: dict[str, dict[str, Any]] = {}
+    template_variavel_max_caracteres: int = 200  # validador de variáveis de template
 
     # CRM mock (Postgres + log JSON Lines). Produção: HubSpot ou outro CRM.
     crm_mock_log: str | None = "var/crm_mock.jsonl"

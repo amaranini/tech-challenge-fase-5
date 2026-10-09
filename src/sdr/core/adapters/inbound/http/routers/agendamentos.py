@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from sdr.core.adapters.inbound.http.dependencias import obter_listar_agendamentos
+from sdr.core.adapters.inbound.http.lead_publico import id_publico
 from sdr.core.application.use_cases.consultar_agenda_e_resumo import ListarAgendamentos
 from sdr.core.domain.agenda import Agendamento, StatusAgendamento
 
@@ -61,6 +62,6 @@ async def listar_agendamentos(
     """Em ordem de início."""
     encontrados = await listar.executar(a_partir_de=a_partir_de, status=status, limite=limite)
     return [
-        AgendamentoResposta.de_dominio(e.agendamento, e.lead.remetente_id if e.lead else None)
+        AgendamentoResposta.de_dominio(e.agendamento, id_publico(e.lead) if e.lead else None)
         for e in encontrados
     ]
