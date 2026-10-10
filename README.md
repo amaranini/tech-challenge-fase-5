@@ -76,41 +76,57 @@ aluguel → compra). Os roteiros (falas do lead + estado final esperado) ficam e
 
 A API aplica as migrations (`alembic upgrade head`) ao iniciar.
 
-### WhatsApp (Twilio Sandbox)
+### WhatsApp
 
 A Lia atende também pelo WhatsApp: mesmas regras, mesmo turno assíncrono e mesma Fila.
 Fora da janela de 24h, só saem templates aprovados ([ADR 012](docs/adr/012-canal-whatsapp-templates.md)).
+O provedor é escolhido em `WHATSAPP_PROVEDOR`: `meta` (Cloud API oficial — o número de
+teste é gratuito) ou `twilio` (conta trial só envia por template; precisa de upgrade).
 
-1. **Número de teste:** no Console do Twilio (busca: "WhatsApp sandbox"), do seu celular
-   mande o `join <código>` indicado para o número de WhatsApp de teste da conta (contas
-   novas recebem um número próprio, ex.: `+1 737 …`; contas antigas usam o Sandbox
-   `+1 415 523 8886`). Use esse mesmo número em `TWILIO_WHATSAPP_FROM`.
-   **Conta trial só envia por Content Template** (erro 21654 "ContentSid Required" para
-   texto livre): para a Lia responder pelo celular, faça o upgrade da conta.
-2. **Túnel** para a API local (o Twilio precisa de uma URL pública):
-   ```bash
-   brew install cloudflared && cloudflared tunnel --url http://localhost:8000
-   # ou: ngrok http 8000
-   ```
-3. **`.env`** (depois `docker compose up -d --build --wait`):
-   ```bash
-   WHATSAPP_PROVEDOR=twilio
-   PUBLIC_BASE_URL=https://<seu-tunel>      # a mesma URL configurada no Twilio
-   TWILIO_ACCOUNT_SID=AC...
-   TWILIO_AUTH_TOKEN=...
-   TWILIO_WHATSAPP_FROM=whatsapp:+<número de teste da conta>
-   FOLLOWUP_UNIDADE=minutos                  # demo: cadência em minutos
-   ```
-4. **Webhook** (*Sandbox settings* do número de teste): "When a message comes in" =
-   `https://<seu-tunel>/webhooks/whatsapp/twilio` (POST). O status de entrega é pedido a
-   cada envio (`/webhooks/whatsapp/twilio/status`); não precisa configurar.
-5. Converse pelo celular. No Streamlit, o lead aparece como `📱 whatsapp:+55...` (só
-   leitura no chat; a equipe responde pela tela Fila, e a resposta chega no WhatsApp).
+**Túnel** para a API local (os dois provedores precisam de uma URL pública):
 
-O túnel muda de URL a cada execução (cloudflared/ngrok grátis): atualize `PUBLIC_BASE_URL`
-(e reinicie a API) e o webhook no Sandbox. Assinatura inválida ⇒ 403 no log da API.
-Templates para aprovação na Meta: [docs/whatsapp-templates.md](docs/whatsapp-templates.md)
-(gerado por `uv run python -m sdr.cli templates-doc`). Telefones aparecem mascarados nos logs.
+```bash
+brew install cloudflared && cloudflared tunnel --url http://localhost:8000
+# a URL https://….trycloudflare.com aparece num quadro no meio do log; deixe o terminal aberto
+```
+
+#### Meta (WhatsApp Cloud API) — recomendado para a demo
+
+1. Em [developers.facebook.com](https://developers.facebook.com), *Meus apps → Criar app*,
+   caso de uso **WhatsApp** (ou tipo *Empresa* + produto WhatsApp).
+2. *WhatsApp → Configuração da API* (*API Setup*): anote o **Phone number ID** do número de
+   teste, gere o **token de acesso** (temporário, 24h) e, em *Para*, cadastre e verifique
+   o seu celular como destinatário.
+3. *Configurações do app → Básico*: copie a **Chave secreta do app** (App Secret).
+4. **`.env`** (depois `docker compose up -d --build --wait`):
+   ```bash
+   WHATSAPP_PROVEDOR=meta
+   META_ACCESS_TOKEN=...          # renove quando expirar (24h)
+   META_PHONE_NUMBER_ID=...
+   META_APP_SECRET=...
+   META_VERIFY_TOKEN=qualquer-texto-que-voce-inventar
+   FOLLOWUP_UNIDADE=minutos        # demo: cadência em minutos
+   ```
+5. *WhatsApp → Configuração* (*Configuration*) → **Webhook → Editar**: URL de callback
+   `https://<seu-tunel>/webhooks/whatsapp/meta` e o mesmo `META_VERIFY_TOKEN` → *Verificar
+   e salvar* (a API precisa estar no ar). Em *Campos do webhook*, assine **messages**.
+6. Do celular, mande "oi" para o número de teste. No Streamlit, o lead aparece como
+   `📱 whatsapp:+55...` (só leitura no chat; a equipe responde pela tela Fila).
+
+#### Twilio
+
+1. No Console (busca "WhatsApp sandbox"), mande do celular o `join <código>` para o número
+   de teste da conta e use esse número em `TWILIO_WHATSAPP_FROM`. **Conta trial só envia
+   por Content Template** (erro 21654): para texto livre, é preciso o upgrade.
+2. `.env`: `WHATSAPP_PROVEDOR=twilio`, `PUBLIC_BASE_URL=https://<seu-tunel>`,
+   `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM=whatsapp:+<número>`.
+3. *Sandbox settings* → "When a message comes in" =
+   `https://<seu-tunel>/webhooks/whatsapp/twilio` (POST).
+
+O túnel grátis muda de URL a cada execução: atualize o webhook no painel (e, no Twilio,
+o `PUBLIC_BASE_URL`). Assinatura inválida ⇒ 403 no log da API. Templates para aprovação:
+[docs/whatsapp-templates.md](docs/whatsapp-templates.md) (gerado por
+`uv run python -m sdr.cli templates-doc`). Telefones aparecem mascarados nos logs.
 
 ## Desenvolvimento
 

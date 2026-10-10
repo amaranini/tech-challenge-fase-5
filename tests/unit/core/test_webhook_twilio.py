@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import httpx
 
 from sdr.core.adapters.inbound.http.app import criar_app
-from sdr.core.adapters.inbound.http.routers.whatsapp_twilio import WebhookWhatsApp
+from sdr.core.adapters.inbound.http.routers.whatsapp_twilio import WebhookTwilio
 from sdr.core.adapters.inbound.http.twilio_assinatura import calcular_assinatura
 from sdr.core.application.use_cases.entregar_mensagem import AtualizarStatusEntrega
 from sdr.core.application.use_cases.receber_mensagem import ReceberMensagem
@@ -33,7 +33,7 @@ class Cenario:
         self.eventos = LeadEventoRepositoryFake()
         self.agendador = AgendadorFake()
         self.entregas = EntregaRepositoryFake(self.conversas)
-        webhook = WebhookWhatsApp(
+        webhook = WebhookTwilio(
             auth_token=TOKEN,
             url_base_publica=BASE_PUBLICA,
             receber_mensagem=ReceberMensagem(
@@ -43,7 +43,7 @@ class Cenario:
                 self.entregas, self.eventos, RelogioFake(datetime(2026, 10, 8, tzinfo=UTC))
             ),
         )
-        app = criar_app(criar_dependencias(whatsapp=lambda: webhook if ligado else None))
+        app = criar_app(criar_dependencias(whatsapp_twilio=lambda: webhook if ligado else None))
         # A app enxerga "http://interno": a assinatura usa a URL pública (túnel).
         self.http = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://interno"

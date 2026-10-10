@@ -6,8 +6,9 @@
 Fora da janela de 24h desde a última mensagem do lead, o WhatsApp só aceita mensagem
 iniciada pela empresa com **template aprovado**. Para cada template abaixo:
 
-1. Crie o template no provedor (Twilio: *Content Template Builder*, tipo *text*; ou no
-   WhatsApp Manager) com o **nome**, a **categoria**, o **idioma** e o **corpo numerado**.
+1. Crie o template no provedor (Meta: *WhatsApp Manager → Modelos de mensagem*; Twilio:
+   *Content Template Builder*, tipo *text*) com o **nome**, a **categoria**, o **idioma**
+   e o **corpo numerado**.
 2. Use os **exemplos** da tabela como valores de amostra das variáveis.
 3. Aprovado, mapeie o nome lógico → template no `.env` da operação
    (`WHATSAPP_TEMPLATES`, JSON), mantendo a ordem das variáveis do corpo numerado.

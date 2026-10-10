@@ -9,7 +9,6 @@
 """
 
 import logging
-import re
 from dataclasses import dataclass
 from typing import Annotated
 
@@ -17,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from sdr.core.adapters.inbound.http.dependencias import obter_dependencias
 from sdr.core.adapters.inbound.http.twilio_assinatura import assinatura_valida, url_publica
+from sdr.core.adapters.inbound.http.whatsapp_comum import normalizar_e164, tipo_midia
 from sdr.core.application.dto.mensagem_recebida import MensagemRecebida, MidiaRecebida
 from sdr.core.application.use_cases.entregar_mensagem import AtualizarStatusEntrega
 from sdr.core.application.use_cases.receber_mensagem import (
@@ -42,7 +42,7 @@ STATUS_TWILIO = {
 
 
 @dataclass(frozen=True)
-class WebhookWhatsApp:
+class WebhookTwilio:
     """Montado pelo bootstrap quando o canal WhatsApp está ligado (WHATSAPP_PROVEDOR)."""
 
     auth_token: str
@@ -52,14 +52,14 @@ class WebhookWhatsApp:
     validar_assinatura: bool = True
 
 
-def obter_webhook(request: Request) -> WebhookWhatsApp:
-    webhook = obter_dependencias(request).whatsapp()
+def obter_webhook(request: Request) -> WebhookTwilio:
+    webhook = obter_dependencias(request).whatsapp_twilio()
     if webhook is None:
-        raise HTTPException(404, "canal WhatsApp desligado (WHATSAPP_PROVEDOR vazio)")
+        raise HTTPException(404, "WhatsApp via Twilio desligado (WHATSAPP_PROVEDOR)")
     return webhook
 
 
-async def _parametros_assinados(request: Request, webhook: WebhookWhatsApp) -> dict[str, str]:
+async def _parametros_assinados(request: Request, webhook: WebhookTwilio) -> dict[str, str]:
     formulario = await request.form()
     parametros = [(nome, str(valor)) for nome, valor in formulario.multi_items()]
     if webhook.validar_assinatura:
@@ -69,21 +69,6 @@ async def _parametros_assinados(request: Request, webhook: WebhookWhatsApp) -> d
             logger.warning("Webhook do Twilio com assinatura inválida (url=%s)", url)
             raise HTTPException(403, "assinatura inválida")
     return dict(parametros)
-
-
-def normalizar_e164(endereco: str) -> str:
-    """ "whatsapp:+55 11 98765-4321" → "+5511987654321"."""
-    digitos = re.sub(r"\D", "", endereco.removeprefix("whatsapp:"))
-    if not digitos:
-        raise ValueError(f"endereço sem telefone: {endereco!r}")
-    return f"+{digitos}"
-
-
-def tipo_midia(content_type: str) -> str:
-    principal = content_type.split("/", 1)[0].lower()
-    return {"audio": "audio", "image": "imagem", "video": "video"}.get(
-        principal, "documento" if principal in {"application", "text"} else "outro"
-    )
 
 
 def mensagem_do_twilio(p: dict[str, str]) -> MensagemRecebida:
@@ -109,7 +94,7 @@ def mensagem_do_twilio(p: dict[str, str]) -> MensagemRecebida:
 
 @router.post("", response_class=Response)
 async def receber(
-    request: Request, webhook: Annotated[WebhookWhatsApp, Depends(obter_webhook)]
+    request: Request, webhook: Annotated[WebhookTwilio, Depends(obter_webhook)]
 ) -> Response:
     """Mensagem do lead (configure como "When a message comes in" no Sandbox)."""
     parametros = await _parametros_assinados(request, webhook)
@@ -130,7 +115,7 @@ async def receber(
 
 @router.post("/status", response_class=Response)
 async def status_entrega(
-    request: Request, webhook: Annotated[WebhookWhatsApp, Depends(obter_webhook)]
+    request: Request, webhook: Annotated[WebhookTwilio, Depends(obter_webhook)]
 ) -> Response:
     """Callback de status (StatusCallback de cada envio): enviada/entregue/lida/falhou."""
     parametros = await _parametros_assinados(request, webhook)

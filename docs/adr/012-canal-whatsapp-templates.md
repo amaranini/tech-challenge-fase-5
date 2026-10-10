@@ -98,3 +98,27 @@ Meta recusaria.
   Unificar exige uma decisão de produto (vínculo por telefone/e-mail) e fica para depois.
 - POC com 1 réplica da API: o webhook só grava e agenda; o turno roda no mesmo processo
   (ADR 006). Em produção, o webhook continua igual e o agendador vira fila.
+
+## Adendo (2026-10-10) — Meta Cloud API como segundo provedor
+
+Na conta **trial** do Twilio, todo envio sem `ContentSid` volta com o erro 21654: texto livre
+só depois do upgrade pago. A Cloud API da Meta (a API oficial, que o Twilio usa por baixo)
+tem número de teste gratuito, com texto livre dentro da janela para até 5 destinatários
+cadastrados. Entrou como segundo provedor, escolhido em `WHATSAPP_PROVEDOR=meta|twilio`.
+Foi a primeira troca real de adapter: core, templates lógicos, janela e Fila não mudaram.
+
+- **Entrada** `/webhooks/whatsapp/meta`: GET de verificação (`hub.verify_token` →
+  `hub.challenge`); POST assinado com `X-Hub-Signature-256` (HMAC-SHA256 do corpo cru com
+  o App Secret); mensagens e status de entrega chegam no mesmo POST; idempotência pelo
+  `wamid`.
+- **Saída** `CanalWhatsAppMeta`: texto até 4096 caracteres; template por nome + idioma +
+  parâmetros posicionais do corpo. Celular brasileiro: o `wa_id` pode vir sem o nono
+  dígito; se a Meta recusar o destinatário (131030), o adapter tenta com o 9.
+- `WHATSAPP_TEMPLATES` aceita `content_sid` (Twilio) ou `nome` (Meta) por nome lógico.
+- **Bloqueio para o Brasil (erro 130497):** o número de teste da Meta é americano, e a
+  Meta bloqueia mensagens de outro país para destinatários no Brasil vindas de contas novas.
+  O recebimento funciona; o envio para celular brasileiro só funciona com um **número
+  brasileiro** cadastrado na conta (envio dentro do Brasil). É também o caminho de
+  produção: a imobiliária usa o próprio número.
+- O app precisa estar inscrito na conta do WhatsApp Business (`POST /{WABA_ID}/subscribed_apps`)
+  para receber mensagens reais; o botão "Testar" do painel funciona mesmo sem isso.

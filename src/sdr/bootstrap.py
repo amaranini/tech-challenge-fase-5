@@ -6,19 +6,21 @@ dela), recebendo daqui a infraestrutura compartilhada.
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI
+from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from sdr.config.settings import Settings, obter_settings
 from sdr.core.adapters.inbound.http.app import criar_app
 from sdr.core.adapters.inbound.http.dependencias import Dependencias
-from sdr.core.adapters.inbound.http.routers.whatsapp_twilio import WebhookWhatsApp
+from sdr.core.adapters.inbound.http.routers.whatsapp_meta import WebhookMeta
+from sdr.core.adapters.inbound.http.routers.whatsapp_twilio import WebhookTwilio
 from sdr.core.adapters.logs import instalar_mascara_pii
 from sdr.core.adapters.outbound.agent.agente_qualificador import (
     AgenteQualificador,
@@ -28,6 +30,13 @@ from sdr.core.adapters.outbound.agent.agente_qualificador import (
 from sdr.core.adapters.outbound.agent.redator_mensagem_ativa import RedatorMensagemAtivaLLM
 from sdr.core.adapters.outbound.agent.redator_resumo import RedatorResumoLLM
 from sdr.core.adapters.outbound.canais.canal_web import CanalWeb
+from sdr.core.adapters.outbound.canais.whatsapp_formato import LIMITE_TWILIO_WHATSAPP
+from sdr.core.adapters.outbound.canais.whatsapp_meta import (
+    LIMITE_META_TEXTO,
+    CanalWhatsAppMeta,
+    ConfigMeta,
+    TemplateMeta,
+)
 from sdr.core.adapters.outbound.canais.whatsapp_twilio import (
     CanalWhatsAppTwilio,
     ConfigTwilio,
@@ -115,19 +124,35 @@ PROVEDORES_LLM: dict[str, Callable[[Settings, str], LLMPort]] = {
     "openai": _llm_openai,
 }
 
-ROTA_STATUS_WHATSAPP = "/webhooks/whatsapp/twilio/status"
+ROTA_STATUS_TWILIO = "/webhooks/whatsapp/twilio/status"
 logger = logging.getLogger(__name__)
 
+CanalWhatsApp = CanalWhatsAppTwilio | CanalWhatsAppMeta
 
-def _canal_whatsapp(settings: Settings, vertical: VerticalMontada) -> CanalWhatsAppTwilio | None:
-    """Canal WhatsApp (Twilio) se WHATSAPP_PROVEDOR=twilio; confere o mapeamento de templates
-    da operação contra os templates lógicos declarados pela vertical."""
-    provedor = (settings.whatsapp_provedor or "").strip().lower()
-    if not provedor:
-        return None
-    if provedor != "twilio":
-        raise RuntimeError(f"WHATSAPP_PROVEDOR={provedor!r} desconhecido; disponíveis: twilio")
-    token = settings.twilio_auth_token.get_secret_value() if settings.twilio_auth_token else ""
+
+def _segredo(valor: SecretStr | None) -> str:
+    return valor.get_secret_value() if valor else ""
+
+
+def _conferir_templates(mapeados: Mapping[str, tuple[str, ...]], vertical: VerticalMontada) -> None:
+    """Mapeamento da operação × templates lógicos declarados pela vertical."""
+    declarados = {t.nome: t for t in vertical.templates}
+    for nome, variaveis in mapeados.items():
+        if nome not in declarados:
+            logger.warning("WHATSAPP_TEMPLATES: %r não é template lógico da vertical", nome)
+        elif variaveis and set(variaveis) != set(declarados[nome].ordem):
+            logger.warning(
+                "WHATSAPP_TEMPLATES: %r mapeia %s, mas o template lógico tem %s",
+                nome,
+                list(variaveis),
+                list(declarados[nome].ordem),
+            )
+    if faltando := sorted(set(declarados) - set(mapeados)):
+        logger.info("Templates sem mapeamento (fora da janela não serão enviados): %s", faltando)
+
+
+def _whatsapp_twilio(settings: Settings) -> CanalWhatsAppTwilio:
+    token = _segredo(settings.twilio_auth_token)
     if not (settings.twilio_account_sid and token and settings.public_base_url):
         raise RuntimeError(
             "WhatsApp (Twilio) exige TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN e PUBLIC_BASE_URL"
@@ -140,29 +165,99 @@ def _canal_whatsapp(settings: Settings, vertical: VerticalMontada) -> CanalWhats
         )
         for nome, cfg in settings.whatsapp_templates.items()
     }
-    declarados = {t.nome: t for t in vertical.templates}
-    for nome, aprovado in templates.items():
-        if nome not in declarados:
-            logger.warning("WHATSAPP_TEMPLATES: %r não é template lógico da vertical", nome)
-        elif aprovado.variaveis and set(aprovado.variaveis) != set(declarados[nome].ordem):
-            logger.warning(
-                "WHATSAPP_TEMPLATES: %r mapeia %s, mas o template lógico tem %s",
-                nome,
-                list(aprovado.variaveis),
-                list(declarados[nome].ordem),
-            )
-    if faltando := sorted(set(declarados) - set(templates)):
-        logger.info("Templates sem mapeamento (fora da janela não serão enviados): %s", faltando)
     return CanalWhatsAppTwilio(
         ConfigTwilio(
             account_sid=settings.twilio_account_sid,
             auth_token=token,
             remetente=settings.twilio_whatsapp_from,
-            status_callback_url=settings.public_base_url.rstrip("/") + ROTA_STATUS_WHATSAPP,
-            limite_caracteres=settings.whatsapp_limite_caracteres,
+            status_callback_url=settings.public_base_url.rstrip("/") + ROTA_STATUS_TWILIO,
+            limite_caracteres=settings.whatsapp_limite_caracteres or LIMITE_TWILIO_WHATSAPP,
             templates=templates,
         )
     )
+
+
+def _whatsapp_meta(settings: Settings) -> CanalWhatsAppMeta:
+    if not (
+        _segredo(settings.meta_access_token)
+        and settings.meta_phone_number_id
+        and _segredo(settings.meta_app_secret)
+        and _segredo(settings.meta_verify_token)
+    ):
+        raise RuntimeError(
+            "WhatsApp (Meta) exige META_ACCESS_TOKEN, META_PHONE_NUMBER_ID, META_APP_SECRET "
+            "e META_VERIFY_TOKEN"
+        )
+    templates = {
+        nome: TemplateMeta(
+            nome=str(cfg.get("nome") or nome),
+            idioma=str(cfg.get("idioma", "pt_BR")),
+            variaveis=tuple(cfg.get("variaveis") or ()),
+        )
+        for nome, cfg in settings.whatsapp_templates.items()
+    }
+    return CanalWhatsAppMeta(
+        ConfigMeta(
+            access_token=_segredo(settings.meta_access_token),
+            phone_number_id=settings.meta_phone_number_id,
+            versao_graph=settings.meta_versao_graph,
+            limite_caracteres=settings.whatsapp_limite_caracteres or LIMITE_META_TEXTO,
+            templates=templates,
+        )
+    )
+
+
+PROVEDORES_WHATSAPP: dict[str, Callable[[Settings], CanalWhatsApp]] = {
+    "twilio": _whatsapp_twilio,
+    "meta": _whatsapp_meta,
+}
+
+
+def _canal_whatsapp(settings: Settings, vertical: VerticalMontada) -> CanalWhatsApp | None:
+    """Canal WhatsApp do provedor em WHATSAPP_PROVEDOR (vazio = desligado)."""
+    provedor = (settings.whatsapp_provedor or "").strip().lower()
+    if not provedor:
+        return None
+    try:
+        criar = PROVEDORES_WHATSAPP[provedor]
+    except KeyError:
+        raise RuntimeError(
+            f"WHATSAPP_PROVEDOR={provedor!r} desconhecido; "
+            f"disponíveis: {sorted(PROVEDORES_WHATSAPP)}"
+        ) from None
+    _conferir_templates(
+        {n: tuple(c.get("variaveis") or ()) for n, c in settings.whatsapp_templates.items()},
+        vertical,
+    )
+    return criar(settings)
+
+
+def _webhooks_whatsapp(
+    settings: Settings,
+    canal: CanalWhatsApp | None,
+    receber: ReceberMensagem,
+    atualizar: AtualizarStatusEntrega,
+) -> tuple[WebhookTwilio | None, WebhookMeta | None]:
+    if isinstance(canal, CanalWhatsAppTwilio):
+        return (
+            WebhookTwilio(
+                auth_token=_segredo(settings.twilio_auth_token),
+                url_base_publica=settings.public_base_url or "",
+                receber_mensagem=receber,
+                atualizar_entrega=atualizar,
+                validar_assinatura=settings.twilio_validar_assinatura,
+            ),
+            None,
+        )
+    if isinstance(canal, CanalWhatsAppMeta):
+        return None, WebhookMeta(
+            app_secret=_segredo(settings.meta_app_secret),
+            verify_token=_segredo(settings.meta_verify_token),
+            receber_mensagem=receber,
+            atualizar_entrega=atualizar,
+            validar_assinatura=settings.meta_validar_assinatura,
+        )
+    return None, None
 
 
 def _montar_saida(
@@ -173,7 +268,7 @@ def _montar_saida(
     conversas: ConversaRepositorySql,
     eventos: LeadEventoRepositorySql,
     relogio: RelogioSistema,
-) -> tuple[EntregarMensagem, AtualizarStatusEntrega, CanalWhatsAppTwilio | None]:
+) -> tuple[EntregarMensagem, AtualizarStatusEntrega, CanalWhatsApp | None]:
     """Saída: cada canal tem seu adapter; a decisão texto livre × template é do core."""
     fuso = ZoneInfo(settings.fuso_operacao)
     canais: dict[Canal, CanalMensagemPort] = {Canal.WEB: CanalWeb()}
@@ -224,8 +319,9 @@ class Container:
     followups: FollowUpRepositorySql
     entrega: EntregarMensagem
     atualizar_entrega: AtualizarStatusEntrega
-    webhook_whatsapp: WebhookWhatsApp | None
-    whatsapp: CanalWhatsAppTwilio | None
+    webhook_twilio: WebhookTwilio | None
+    webhook_meta: WebhookMeta | None
+    whatsapp: CanalWhatsApp | None
     agenda: AgendaPostgres
     relogio: RelogioSistema
     settings: Settings
@@ -405,15 +501,9 @@ def montar_container(settings: Settings | None = None) -> Container:
     receber_mensagem = ReceberMensagem(
         leads, conversas, eventos, agendador, followups=programar_followups
     )
-    webhook_whatsapp = None
-    if whatsapp is not None and settings.public_base_url and settings.twilio_auth_token:
-        webhook_whatsapp = WebhookWhatsApp(
-            auth_token=settings.twilio_auth_token.get_secret_value(),
-            url_base_publica=settings.public_base_url,
-            receber_mensagem=receber_mensagem,
-            atualizar_entrega=atualizar_entrega,
-            validar_assinatura=settings.twilio_validar_assinatura,
-        )
+    webhook_twilio, webhook_meta = _webhooks_whatsapp(
+        settings, whatsapp, receber_mensagem, atualizar_entrega
+    )
 
     return Container(
         engine=engine,
@@ -450,7 +540,8 @@ def montar_container(settings: Settings | None = None) -> Container:
         followups=followups,
         entrega=entrega,
         atualizar_entrega=atualizar_entrega,
-        webhook_whatsapp=webhook_whatsapp,
+        webhook_twilio=webhook_twilio,
+        webhook_meta=webhook_meta,
         whatsapp=whatsapp,
         agenda=agenda,
         relogio=relogio,
@@ -489,7 +580,8 @@ def criar_aplicacao(settings: Settings | None = None) -> FastAPI:
             devolver_atendimento=lambda: container.devolver_atendimento,
             enviar_mensagem_responsavel=lambda: container.enviar_mensagem_responsavel,
             programar_followups=lambda: container.programar_followups,
-            whatsapp=lambda: container.webhook_whatsapp,
+            whatsapp_twilio=lambda: container.webhook_twilio,
+            whatsapp_meta=lambda: container.webhook_meta,
         ),
         routers=container.vertical.routers,
         ao_iniciar=[

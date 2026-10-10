@@ -1,6 +1,6 @@
 # CLAUDE.md — Agente SDR Conversacional (vertical ativa: imobiliário)
 
-## Fase atual: Dia 4 — Etapa A
+## Fase atual: Dia 4 — Etapa B (aceite da A no celular aguarda o número BR na Meta)
 
 Ao fim de CADA etapa: parar, listar como verificar o critério de aceite e esperar o ok da PO.
 Commits só com ok da PO, um por etapa, na branch `dia-4` (nunca direto na `main`); ao fim
@@ -110,8 +110,10 @@ src/sdr/
       inbound/http/        app FastAPI (registra routers da vertical), /health, GET /leads,
                            GET /leads/{lead_id} (qualificação; 404 se não existe),
                            POST /conversas/mensagens (202) e GET /conversas/{lead_id}/mensagens;
-                           POST /webhooks/whatsapp/twilio (+ /status): assinatura com
-                           PUBLIC_BASE_URL, idempotência por MessageSid; lead_publico.py
+                           /webhooks/whatsapp/meta (GET handshake; POST X-Hub-Signature-256,
+                           mensagens + status) e /webhooks/whatsapp/twilio (+ /status;
+                           assinatura com PUBLIC_BASE_URL); idempotência pelo id do
+                           provedor; lead_publico.py
                            (web: "lead-ana"; outros: "whatsapp:+5511...")
       outbound/persistence/  engine async (SQLAlchemy + psycopg 3), Base ORM compartilhado,
                              leads (fichas JSONB + projeções da qualificação), conversas,
@@ -126,8 +128,9 @@ src/sdr/
       outbound/relogio.py    RelogioSistema (RelogioPort)
       outbound/turnos/       AgendadorDebounce (asyncio in-process; produção: fila/Redis)
       outbound/canais/       CanalWeb (resposta já persistida; front faz polling; template =
-                             preview) e CanalWhatsAppTwilio (httpx; whatsapp_formato.py:
-                             *negrito*, divisão em 1600, variáveis nomeadas → numeradas)
+                             preview), CanalWhatsAppMeta (Cloud API; nono dígito BR) e
+                             CanalWhatsAppTwilio (httpx; whatsapp_formato.py: *negrito*,
+                             divisão no limite, variáveis nomeadas → numeradas)
       logs.py                FiltroPII nos handlers (inclusive access log do uvicorn)
       outbound/embeddings/   fastembed (ONNX) local multilíngue (ADR 002)
       outbound/llm/          LLMOpenAI (Chat Completions + tool calling); provedor via
@@ -312,11 +315,12 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
 - Agenda: `FUSO_OPERACAO` (America/Sao_Paulo), `AGENDA_ANTECEDENCIA_HORAS` (2),
   `AGENDA_JANELA_DIAS` (14), `AGENDA_SUGESTOES` (3), `AGENDA_MOCK_*` (10 dias úteis, 9h–20h,
   slots de 60 min; ~1 em 4 já ocupado por "outros compromissos").
-- WhatsApp (Twilio Sandbox): `WHATSAPP_PROVEDOR=twilio`, `PUBLIC_BASE_URL` (túnel:
-  `cloudflared tunnel --url http://localhost:8000`), `TWILIO_ACCOUNT_SID/AUTH_TOKEN/
-  WHATSAPP_FROM`, `WHATSAPP_TEMPLATES` (JSON nome lógico → content_sid/variaveis),
-  `TEMPLATE_VARIAVEL_MAX_CARACTERES`. Webhook no Sandbox: `<túnel>/webhooks/whatsapp/twilio`.
-  Passo a passo no README.
+- WhatsApp: `WHATSAPP_PROVEDOR=meta|twilio`; túnel `cloudflared tunnel --url
+  http://localhost:8000`. Meta (demo, número de teste grátis): `META_ACCESS_TOKEN` (24h),
+  `META_PHONE_NUMBER_ID`, `META_APP_SECRET`, `META_VERIFY_TOKEN`; webhook
+  `<túnel>/webhooks/whatsapp/meta` assinando "messages". Twilio (trial só envia template):
+  `PUBLIC_BASE_URL`, `TWILIO_*`. `WHATSAPP_TEMPLATES` (JSON nome lógico → content_sid|nome,
+  variaveis), `TEMPLATE_VARIAVEL_MAX_CARACTERES`. Passo a passo no README.
 - `make busca q="apê 2 quartos zona sul até 800 mil perto do metrô"` — testa POST /imoveis/busca.
 - Debounce: `DEBOUNCE_SEGUNDOS` (5) e `DEBOUNCE_MAX_SEGUNDOS` (20).
 - Follow-up: `FOLLOWUP_UNIDADE=dias|minutos` (demo), `FOLLOWUP_RESPEITAR_HORARIO`,

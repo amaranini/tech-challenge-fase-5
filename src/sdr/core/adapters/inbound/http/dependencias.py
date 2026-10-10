@@ -21,7 +21,8 @@ from sdr.core.application.use_cases.receber_mensagem import ReceberMensagem
 from sdr.core.application.use_cases.verificar_saude import VerificarSaude
 
 if TYPE_CHECKING:
-    from sdr.core.adapters.inbound.http.routers.whatsapp_twilio import WebhookWhatsApp
+    from sdr.core.adapters.inbound.http.routers.whatsapp_meta import WebhookMeta
+    from sdr.core.adapters.inbound.http.routers.whatsapp_twilio import WebhookTwilio
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,8 @@ class Dependencias:
     devolver_atendimento: Callable[[], DevolverAtendimento]
     enviar_mensagem_responsavel: Callable[[], EnviarMensagemResponsavel]
     programar_followups: Callable[[], ProgramarFollowUps | None]
-    whatsapp: "Callable[[], WebhookWhatsApp | None]" = field(default=lambda: None)
+    whatsapp_twilio: "Callable[[], WebhookTwilio | None]" = field(default=lambda: None)
+    whatsapp_meta: "Callable[[], WebhookMeta | None]" = field(default=lambda: None)
 
 
 def obter_dependencias(request: Request) -> Dependencias:
