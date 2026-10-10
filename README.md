@@ -81,8 +81,12 @@ A API aplica as migrations (`alembic upgrade head`) ao iniciar.
 A Lia atende também pelo WhatsApp: mesmas regras, mesmo turno assíncrono e mesma Fila.
 Fora da janela de 24h, só saem templates aprovados ([ADR 012](docs/adr/012-canal-whatsapp-templates.md)).
 
-1. **Sandbox:** no Console do Twilio, abra *Messaging → Try it out → Send a WhatsApp
-   message* e, do seu celular, mande `join <código>` para o número do Sandbox.
+1. **Número de teste:** no Console do Twilio (busca: "WhatsApp sandbox"), do seu celular
+   mande o `join <código>` indicado para o número de WhatsApp de teste da conta (contas
+   novas recebem um número próprio, ex.: `+1 737 …`; contas antigas usam o Sandbox
+   `+1 415 523 8886`). Use esse mesmo número em `TWILIO_WHATSAPP_FROM`.
+   **Conta trial só envia por Content Template** (erro 21654 "ContentSid Required" para
+   texto livre): para a Lia responder pelo celular, faça o upgrade da conta.
 2. **Túnel** para a API local (o Twilio precisa de uma URL pública):
    ```bash
    brew install cloudflared && cloudflared tunnel --url http://localhost:8000
@@ -94,10 +98,10 @@ Fora da janela de 24h, só saem templates aprovados ([ADR 012](docs/adr/012-cana
    PUBLIC_BASE_URL=https://<seu-tunel>      # a mesma URL configurada no Twilio
    TWILIO_ACCOUNT_SID=AC...
    TWILIO_AUTH_TOKEN=...
-   TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
+   TWILIO_WHATSAPP_FROM=whatsapp:+<número de teste da conta>
    FOLLOWUP_UNIDADE=minutos                  # demo: cadência em minutos
    ```
-4. **Webhook no Sandbox** (*Sandbox settings*): "When a message comes in" =
+4. **Webhook** (*Sandbox settings* do número de teste): "When a message comes in" =
    `https://<seu-tunel>/webhooks/whatsapp/twilio` (POST). O status de entrega é pedido a
    cada envio (`/webhooks/whatsapp/twilio/status`); não precisa configurar.
 5. Converse pelo celular. No Streamlit, o lead aparece como `📱 whatsapp:+55...` (só
