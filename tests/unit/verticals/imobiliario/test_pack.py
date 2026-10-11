@@ -68,10 +68,16 @@ def test_montar_entrega_follow_up_com_templates_e_lembrete() -> None:
 
     cadencias_validas(montada.cadencias_followup)  # todas terminam em encerramento
     assert set(montada.cadencias_followup) == set(SituacaoLead)
-    templates = {e.template for c in montada.cadencias_followup.values() for e in c.etapas}
+    templates = {e.template.nome for c in montada.cadencias_followup.values() for e in c.etapas}
     assert all(t.startswith("imob_") for t in templates)
     assert montada.lembrete_agendamento is not None
-    assert montada.lembrete_agendamento.template == "imob_lembrete_agendamento"
+    assert montada.lembrete_agendamento.template.nome == "imob_lembrete_agendamento"
+    assert montada.template_resposta_responsavel is not None
+    assert {t.nome for t in montada.templates} == {
+        *templates,
+        "imob_lembrete_agendamento",
+        "imob_resposta_equipe",
+    }
     consulta = montada.consulta_followup
     assert consulta is not None
     busca = consulta("compra", {"regiao": "Moema", "preco_max": 800000, "quartos": 2})

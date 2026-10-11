@@ -20,6 +20,12 @@ from uuid import UUID, uuid4
 
 from sdr.core.application.ports.agenda import AgendaPort
 from sdr.core.application.ports.crm import CRMPort
+from sdr.core.application.ports.observabilidade import (
+    ContextoRastro,
+    RastreioNulo,
+    RastreioPort,
+    Rastro,
+)
 from sdr.core.application.ports.relogio import RelogioPort
 from sdr.core.application.ports.repositorios import (
     ConversaRepository,
@@ -84,7 +90,9 @@ class GerarResumoHandoff:
         intencoes: Sequence[IntencaoVertical],
         gatilhos_iniciais: Collection[TipoEvento] = GATILHOS_INICIAIS,
         gatilhos_atualizacao: Collection[TipoEvento] = GATILHOS_ATUALIZACAO,
+        rastreio: RastreioPort | None = None,
     ) -> None:
+        self._rastreio: RastreioPort = rastreio or RastreioNulo()
         self._leads = leads
         self._conversas = conversas
         self._eventos = eventos
@@ -122,6 +130,30 @@ class GerarResumoHandoff:
             logger.info("Resumo do lead %s já reflete os fatos (v%d)", lead_id, anterior.versao)
             return ResultadoResumo(anterior, nova_versao=False)
 
+        contexto = ContextoRastro(
+            "resumo",
+            lead.id,
+            lead.canal.value,
+            lead.atendimento_atual.estado.value,
+            lead.qualificacao.intencao_atual,
+            entrada={"gatilho": gatilho},
+            metadados={"template_resumo": self._template.versao},
+        )
+        with self._rastreio.rastrear(contexto) as rastro:
+            resultado = await self._gerar(lead, gatilho, fatos, anterior, rastro)
+            rastro.saida = {"versao": resultado.resumo.versao, "titulo": resultado.resumo.titulo}
+            return resultado
+
+    async def _gerar(
+        self,
+        lead: Lead,
+        gatilho: str,
+        fatos: FatosResumo,
+        anterior: Resumo | None,
+        rastro: Rastro,
+    ) -> ResultadoResumo:
+        lead_id = lead.id
+        impressao = fatos.impressao_digital()
         rascunho = await self._redator.redigir(fatos, self._template)
         secoes, descartados = ancorar(rascunho.secoes, self._template, fatos)
         textos = {
@@ -164,6 +196,7 @@ class GerarResumoHandoff:
                         "gatilho": gatilho,
                         "crm_id": registro.crm_id,
                         "descartados": len(descartados),
+                        **({"trace_id": rastro.trace_id} if rastro.trace_id else {}),
                     },
                 )
             ]

@@ -21,6 +21,7 @@ from uuid import UUID, uuid4
 
 from sdr.core.domain.atendimento import Atendimento, EstadoAtendimento, HorarioAtendimento
 from sdr.core.domain.qualificacao import Qualificacao
+from sdr.core.domain.template import TemplateLogico
 
 
 class TipoFollowUp(StrEnum):
@@ -54,7 +55,7 @@ class EtapaCadencia:
 
     apos: int  # unidades desde a etapa anterior (a 1ª: desde a última resposta)
     objetivo: str  # orientação para a mensagem
-    template: str  # template aprovado no canal, usado fora da janela de conversa (WhatsApp)
+    template: TemplateLogico  # fora da janela de conversa do canal (ex.: 24h no WhatsApp)
     encerramento: bool = False  # a última: despedida educada, porta aberta
 
 
@@ -63,7 +64,7 @@ class ModeloLembrete:
     """Lembrete de agendamento da vertical (sem ele, o core não programa lembretes)."""
 
     objetivo: str
-    template: str
+    template: TemplateLogico  # fora da janela de conversa do canal
 
 
 @dataclass(frozen=True)

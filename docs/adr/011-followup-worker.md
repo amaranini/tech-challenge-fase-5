@@ -61,6 +61,8 @@ Tudo isso roda fora da conversa, num processo separado e seguro para várias ré
    persistir, a mensagem sai sem o item.
 7. **Envio pelo `CanalMensagemPort`.** Fora da janela de 24h, a mensagem sai por
    `enviar_template` e é marcada `requer_template` (relevante para o WhatsApp no Dia 4).
+   Detalhado no [ADR 012](012-canal-whatsapp-templates.md): a decisão passou para o caso
+   de uso `EntregarMensagem` e o template virou `TemplateLogico` com variáveis validadas.
 8. **Demo:** `POST /demo/leads/{id}/simular-inatividade` antecipa a próxima retomada para
    agora, sem esperar o expediente, e o worker a envia na próxima varredura. O painel tem o
    botão "⏩ Simular inatividade". Lead com opt-out responde 409.

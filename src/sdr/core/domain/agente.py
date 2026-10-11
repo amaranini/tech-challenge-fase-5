@@ -24,6 +24,10 @@ class Persona:
     prompt_sistema: str
     padrao_codigo_item: str | None = None
     mensagem_fallback: str = "Deixa eu conferir isso direitinho e já te respondo, tá bom?"
+    # Resposta a áudio/imagem/documento: por enquanto o assistente só entende texto.
+    aviso_midia: str = (
+        "Por enquanto eu só consigo ler mensagens de texto. Pode me escrever o que precisa?"
+    )
 
     def codigos_citados(self, texto: str) -> list[str]:
         if not self.padrao_codigo_item:

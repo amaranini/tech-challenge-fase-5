@@ -1,0 +1,17 @@
+# Tema do front (dashboard + chat). Cores da paleta de referência de visualização:
+# azul da série única, superfícies quase brancas e texto em tinta neutra.
+[theme]
+base = "light"
+primaryColor = "#2a78d6"
+backgroundColor = "#fcfcfb"
+secondaryBackgroundColor = "#f1f0ec"
+textColor = "#0b0b0b"
+font = "sans serif"
+borderColor = "#e3e2dd"
+showSidebarBorder = true
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false

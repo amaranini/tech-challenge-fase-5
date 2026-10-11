@@ -20,6 +20,7 @@ from tests.apoio.fakes import (
     LeadEventoRepositoryFake,
     LeadRepositoryFake,
     TravaFake,
+    entrega_fake,
     item,
 )
 
@@ -53,7 +54,7 @@ class Cenario:
             persona=PERSONA,
             trava=self.trava,
             agendador=self.agendador,
-            canais={Canal.WEB: self.canal},
+            entrega=entrega_fake(self.conversas, self.eventos, self.canal),
             max_reprocessamentos=max_reprocessamentos,
         )
         self.lead = Lead.novo(Canal.WEB, "lead-1")
@@ -297,7 +298,7 @@ async def test_publica_os_eventos_do_turno_depois_de_enviar_a_resposta() -> None
         persona=PERSONA,
         trava=cenario.trava,
         agendador=cenario.agendador,
-        canais={Canal.WEB: cenario.canal},
+        entrega=entrega_fake(cenario.conversas, cenario.eventos, cenario.canal),
         publicador=publicador,
     )
     cenario.chega("vou financiar")

@@ -30,7 +30,7 @@
 import json
 import logging
 import operator
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -62,6 +62,7 @@ from sdr.core.adapters.outbound.agent.atendimento import (
 from sdr.core.application.ports.agente import EntradaAgente
 from sdr.core.application.ports.ferramenta import Ferramenta, ResultadoFerramenta
 from sdr.core.application.ports.llm import LLMPort, MensagemLLM, PapelLLM
+from sdr.core.application.ports.observabilidade import RastreioNulo, RastreioPort
 from sdr.core.application.ports.relogio import RelogioPort
 from sdr.core.application.use_cases.conduzir_agendamento import (
     ConduzirAgendamento,
@@ -100,7 +101,12 @@ logger = logging.getLogger(__name__)
 
 FUSO_PADRAO = ZoneInfo("America/Sao_Paulo")
 PASTA_PROMPTS = Path(__file__).resolve().parent / "prompts"
-PROMPT_ROTEADOR = (PASTA_PROMPTS / "roteador_v2.md").read_text(encoding="utf-8")
+# Versões dos prompts do core (vão para o rastro de cada turno).
+VERSOES_PROMPTS = (
+    "roteador_v3,extracao_v2,agenda_interpretacao_v2,agendamento_v1,atendimento_v1,"
+    "atendimento_classificacao_v1,limites_v1,opt_out_v1"
+)
+PROMPT_ROTEADOR = (PASTA_PROMPTS / "roteador_v3.md").read_text(encoding="utf-8")
 PROMPT_CLASSIFICACAO_ATENDIMENTO = (PASTA_PROMPTS / "atendimento_classificacao_v1.md").read_text(
     encoding="utf-8"
 )
@@ -108,7 +114,7 @@ PROMPT_ATENDIMENTO = (PASTA_PROMPTS / "atendimento_v1.md").read_text(encoding="u
 PROMPT_LIMITES = (PASTA_PROMPTS / "limites_v1.md").read_text(encoding="utf-8")
 PROMPT_OPT_OUT = (PASTA_PROMPTS / "opt_out_v1.md").read_text(encoding="utf-8")
 PROMPT_EXTRACAO = (PASTA_PROMPTS / "extracao_v2.md").read_text(encoding="utf-8")
-PROMPT_INTERPRETACAO_AGENDA = (PASTA_PROMPTS / "agenda_interpretacao_v1.md").read_text(
+PROMPT_INTERPRETACAO_AGENDA = (PASTA_PROMPTS / "agenda_interpretacao_v2.md").read_text(
     encoding="utf-8"
 )
 PROMPT_AGENDAMENTO = (PASTA_PROMPTS / "agendamento_v1.md").read_text(encoding="utf-8")
@@ -222,6 +228,20 @@ def _itens_citados(historico: Sequence[Mensagem], limite: int = 5) -> tuple[str,
     return tuple(vistos)[:limite]
 
 
+def _resumo_do_no(resultado: Mapping[str, object]) -> dict[str, object]:
+    """O que o nó decidiu, sem o histórico: valores simples e o texto da última mensagem."""
+    resumo: dict[str, object] = {
+        k: v for k, v in resultado.items() if isinstance(v, str | int | float | bool) or v is None
+    }
+    for chave in ("roteamento", "campos_faltantes"):
+        if chave in resultado:
+            resumo[chave] = resultado[chave]
+    mensagens = resultado.get("mensagens")
+    if isinstance(mensagens, list) and mensagens:
+        resumo["mensagem"] = getattr(mensagens[-1], "conteudo", None)
+    return resumo
+
+
 def _descricao_campo(intencao: IntencaoVertical, campo: str) -> str:
     propriedades = intencao.schema.schema_extracao().get("properties", {})
     if isinstance(propriedades, Mapping):
@@ -244,7 +264,9 @@ class AgenteQualificador:
         agenda: ConduzirAgendamento | None = None,
         relogio: RelogioPort | None = None,
         horario: HorarioAtendimento = HORARIO_PADRAO,
+        rastreio: RastreioPort | None = None,
     ) -> None:
+        self._rastreio: RastreioPort = rastreio or RastreioNulo()
         self._llms = llms
         self._horario = horario
         self._agenda = agenda
@@ -260,27 +282,59 @@ class AgenteQualificador:
         self._grafo = self._construir_grafo()
 
     # ------------------------------------------------------------------ grafo
+    def _observado(
+        self,
+        nome: str,
+        no: Callable[[EstadoGrafo], Awaitable[dict[str, object]]],
+        *,
+        tipo: str = "span",
+    ) -> Callable[[EstadoGrafo], Awaitable[dict[str, object]]]:
+        """Cada nó vira uma etapa no rastro do turno (as gerações do LLM ficam dentro)."""
+
+        async def executar(estado: EstadoGrafo) -> dict[str, object]:
+            with self._rastreio.etapa(nome, tipo=tipo) as observacao:
+                resultado = await no(estado)
+                observacao.saida = _resumo_do_no(resultado)
+                return resultado
+
+        return executar
+
     def _construir_grafo(
         self,
     ) -> CompiledStateGraph[EstadoGrafo, None, EstadoGrafo, EstadoGrafo]:
         grafo = StateGraph(EstadoGrafo)
         # Os stubs do LangGraph não reconhecem TypedDict no Protocol genérico de add_node.
-        grafo.add_node("roteador", self._no_roteador)  # type: ignore[call-overload]
-        grafo.add_node("extracao", self._no_extracao)  # type: ignore[call-overload]
-        grafo.add_node("scoring", self._no_scoring)  # type: ignore[call-overload]
-        grafo.add_node("especialista", self._no_especialista)  # type: ignore[call-overload]
-        grafo.add_node("descoberta", self._no_descoberta)  # type: ignore[call-overload]
-        grafo.add_node("ferramentas", self._no_ferramentas)  # type: ignore[call-overload]
-        grafo.add_node("agenda", self._no_agenda)  # type: ignore[call-overload]
-        grafo.add_node("responder_agenda", self._no_responder_agenda)  # type: ignore[call-overload]
-        grafo.add_node("gate", self._no_gate)  # type: ignore[call-overload]
-        grafo.add_node("silencio", self._no_silencio)  # type: ignore[call-overload]
-        grafo.add_node("espera", self._no_espera)  # type: ignore[call-overload]
-        grafo.add_node("confirmacao_handoff", self._no_confirmacao_handoff)  # type: ignore[call-overload]
-        grafo.add_node("confirmacao_retorno", self._no_confirmacao_retorno)  # type: ignore[call-overload]
-        grafo.add_node("solicitar_handoff", self._no_solicitar_handoff)  # type: ignore[call-overload]
-        grafo.add_node("responder_atendimento", self._no_responder_atendimento)  # type: ignore[call-overload]
-        grafo.add_node("opt_out", self._no_opt_out)  # type: ignore[call-overload]
+        grafo.add_node("roteador", self._observado("roteador", self._no_roteador))  # type: ignore[call-overload]
+        grafo.add_node("extracao", self._observado("extracao", self._no_extracao))  # type: ignore[call-overload]
+        grafo.add_node("scoring", self._observado("scoring", self._no_scoring))  # type: ignore[call-overload]
+        grafo.add_node("especialista", self._observado("especialista", self._no_especialista))  # type: ignore[call-overload]
+        grafo.add_node("descoberta", self._observado("descoberta", self._no_descoberta))  # type: ignore[call-overload]
+        grafo.add_node(
+            "ferramentas", self._observado("ferramentas", self._no_ferramentas, tipo="tool")
+        )  # type: ignore[call-overload]
+        grafo.add_node("agenda", self._observado("agenda", self._no_agenda))  # type: ignore[call-overload]
+        grafo.add_node(
+            "responder_agenda", self._observado("responder_agenda", self._no_responder_agenda)
+        )  # type: ignore[call-overload]
+        grafo.add_node("gate", self._observado("gate", self._no_gate))  # type: ignore[call-overload]
+        grafo.add_node("silencio", self._observado("silencio", self._no_silencio))  # type: ignore[call-overload]
+        grafo.add_node("espera", self._observado("espera", self._no_espera))  # type: ignore[call-overload]
+        grafo.add_node(
+            "confirmacao_handoff",
+            self._observado("confirmacao_handoff", self._no_confirmacao_handoff),
+        )  # type: ignore[call-overload]
+        grafo.add_node(
+            "confirmacao_retorno",
+            self._observado("confirmacao_retorno", self._no_confirmacao_retorno),
+        )  # type: ignore[call-overload]
+        grafo.add_node(
+            "solicitar_handoff", self._observado("solicitar_handoff", self._no_solicitar_handoff)
+        )  # type: ignore[call-overload]
+        grafo.add_node(
+            "responder_atendimento",
+            self._observado("responder_atendimento", self._no_responder_atendimento),
+        )  # type: ignore[call-overload]
+        grafo.add_node("opt_out", self._observado("opt_out", self._no_opt_out))  # type: ignore[call-overload]
 
         grafo.add_edge(START, "gate")
         por_estado = {
@@ -450,6 +504,10 @@ class AgenteQualificador:
                 "quer_agendar": {"type": "boolean"},
                 "fora_do_alcance": {"type": "boolean"},
                 "opt_out": {"type": "boolean"},
+                "pedido": {
+                    "type": "string",
+                    "enum": ["informacao", "conversar_com_pessoa", "outra"],
+                },
             },
             "required": [
                 "intencao",
@@ -458,6 +516,7 @@ class AgenteQualificador:
                 "quer_agendar",
                 "fora_do_alcance",
                 "opt_out",
+                "pedido",
             ],
             "additionalProperties": False,
         }
@@ -483,6 +542,15 @@ class AgenteQualificador:
         except (TypeError, ValueError):
             confianca = 0.0
 
+        sinal_humano = ler_sinal_humano(resposta.dados.get("atendimento_humano", SEM_HANDOFF))
+        # Perguntar o que a equipe disse ("quanto o Fulano falou?") é pedir INFORMAÇÃO, não
+        # uma pessoa: só a instrução no prompt não bastou (LLM real); o sinal estruturado
+        # sobre o que a fala pede desempata.
+        if (
+            sinal_humano is MotivoHandoff.PEDIDO_EXPLICITO
+            and resposta.dados.get("pedido") == "informacao"
+        ):
+            sinal_humano = None
         destino = self._intencoes.get(classificada)
         q, eventos = estado["qualificacao"].aplicar_intencao(
             classificada,
@@ -496,7 +564,7 @@ class AgenteQualificador:
             "intencao_atual": q.intencao_atual,
             "ficha": dict(q.ficha),
             "eventos": eventos,
-            "sinal_humano": ler_sinal_humano(resposta.dados.get("atendimento_humano", SEM_HANDOFF)),
+            "sinal_humano": sinal_humano,
             "quer_agendar": resposta.dados.get("quer_agendar") is True,
             "fora_do_alcance": resposta.dados.get("fora_do_alcance") is True,
             "opt_out": resposta.dados.get("opt_out") is True,
@@ -507,6 +575,7 @@ class AgenteQualificador:
                 "quer_agendar": resposta.dados.get("quer_agendar"),
                 "fora_do_alcance": resposta.dados.get("fora_do_alcance"),
                 "opt_out": resposta.dados.get("opt_out"),
+                "pedido": resposta.dados.get("pedido"),
                 "modelo": resposta.modelo,
             },
             "tokens_entrada": resposta.tokens_entrada,

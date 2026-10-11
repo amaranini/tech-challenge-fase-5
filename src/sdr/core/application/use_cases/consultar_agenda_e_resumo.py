@@ -55,9 +55,19 @@ class ListarAgendamentos:
         a_partir_de: datetime | None = None,
         status: StatusAgendamento | None = None,
         limite: int = 100,
+        lead: tuple[Canal, str] | None = None,
     ) -> list[AgendamentoDoLead]:
+        lead_id = None
+        if lead is not None:
+            encontrado = await self._leads.obter_por_remetente(*lead)
+            if encontrado is None:
+                return []
+            lead_id = encontrado.id
         agendamentos = await self._agenda.listar_agendamentos(
-            a_partir_de=a_partir_de, status=status, limite=max(1, min(limite, 500))
+            lead_id=lead_id,
+            a_partir_de=a_partir_de,
+            status=status,
+            limite=max(1, min(limite, 500)),
         )
         leads: dict[UUID, Lead | None] = {}
         for ag in agendamentos:

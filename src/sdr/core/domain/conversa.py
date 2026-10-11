@@ -33,6 +33,44 @@ class StatusMensagem(StrEnum):
     PROCESSADA = "processada"  # do lead, já respondida
     FALHA = "falha"  # do lead, o turno falhou (fica no histórico, sem resposta)
     ENVIADA = "enviada"  # do assistente ou do responsável, entregue ao canal
+    NAO_ENVIADA = "nao_enviada"  # bloqueada antes do canal (ex.: sem template fora da janela)
+
+
+class StatusEntrega(StrEnum):
+    """O que o provedor do canal informou sobre uma mensagem que saiu (callback de status)."""
+
+    ENVIADA = "enviada"
+    ENTREGUE = "entregue"
+    LIDA = "lida"
+    FALHOU = "falhou"
+
+    @property
+    def ordem(self) -> int:
+        return _ORDEM_ENTREGA[self]
+
+
+_ORDEM_ENTREGA = {
+    StatusEntrega.ENVIADA: 1,
+    StatusEntrega.ENTREGUE: 2,
+    StatusEntrega.LIDA: 3,
+    StatusEntrega.FALHOU: 4,
+}
+
+
+def avancar_entrega(atual: StatusEntrega | None, novo: StatusEntrega) -> StatusEntrega:
+    """Callbacks chegam fora de ordem: o status de uma parte nunca regride (falha é final)."""
+    if atual is None:
+        return novo
+    return novo if novo.ordem > atual.ordem else atual
+
+
+def entrega_da_mensagem(partes: "list[StatusEntrega]") -> StatusEntrega | None:
+    """Mensagem dividida em partes: falhou se alguma falhou; senão, o status da mais atrasada."""
+    if not partes:
+        return None
+    if StatusEntrega.FALHOU in partes:
+        return StatusEntrega.FALHOU
+    return min(partes, key=lambda s: s.ordem)
 
 
 class StatusConversa(StrEnum):
@@ -111,6 +149,8 @@ class Mensagem:
     criada_em: datetime
     metadados: Mapping[str, object] = field(default_factory=dict)
     status: StatusMensagem = StatusMensagem.PROCESSADA
+    id_externo: str | None = None  # id no provedor (recebida: idempotência do webhook)
+    entrega: StatusEntrega | None = None  # saída: o que o provedor informou
 
     @classmethod
     def nova(
@@ -122,6 +162,7 @@ class Mensagem:
         metadados: Mapping[str, object] | None = None,
         criada_em: datetime | None = None,
         status: StatusMensagem | None = None,
+        id_externo: str | None = None,
     ) -> "Mensagem":
         padrao = StatusMensagem.PROCESSADA if papel is Papel.LEAD else StatusMensagem.ENVIADA
         return cls(
@@ -132,4 +173,5 @@ class Mensagem:
             criada_em=criada_em or agora(),
             metadados=dict(metadados or {}),
             status=status or padrao,
+            id_externo=id_externo,
         )

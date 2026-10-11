@@ -28,7 +28,7 @@ from tests.apoio.cenarios import Cenario, carregar_cenarios, divergencias, diver
 
 pytestmark = pytest.mark.llm
 
-APP_WEB = Path(__file__).resolve().parents[2] / "web" / "app.py"
+PAGINAS_WEB = Path(__file__).resolve().parents[2] / "web" / "paginas"
 CENARIOS = carregar_cenarios()
 
 
@@ -55,7 +55,7 @@ def _resumo(estado: dict[str, Any]) -> str:
 
 def _conferir_painel(lead_id: str, estado: dict[str, Any]) -> None:
     """O painel ao lado do chat mostra intenção, score, ficha e próxima ação do lead."""
-    app = AppTest.from_file(str(APP_WEB), default_timeout=30)
+    app = AppTest.from_file(str(PAGINAS_WEB / "chat.py"), default_timeout=30)
     app.session_state["lead_id"] = lead_id
     app.run()
     assert not app.exception, [e.value for e in app.exception]
@@ -73,12 +73,11 @@ def _conferir_painel(lead_id: str, estado: dict[str, Any]) -> None:
 def _conferir_resumo_na_fila(lead_id: str) -> None:
     """Quem atende vê o resumo na tela Fila, junto da conversa do lead."""
     aguardar_resumo(lead_id, None)  # gerado fora do turno
-    app = AppTest.from_file(str(APP_WEB), default_timeout=30)
-    app.session_state["tela"] = "fila"
+    app = AppTest.from_file(str(PAGINAS_WEB / "fila.py"), default_timeout=30)
     app.session_state["responsavel_nome"] = "Teste"
     app.run()
     assert not app.exception, [e.value for e in app.exception]
-    [bloco] = [e for e in app.expander if e.label.startswith(f"{lead_id} — com")]
+    [bloco] = [e for e in app.expander if f"{lead_id} — com" in e.label]  # "💻 <id> — com"
     textos = "\n".join(m.value for m in bloco.markdown)
     assert "Resumo do lead para o corretor" in textos, "o resumo não aparece na Fila"
     assert "Necessidades (ficha)" in textos

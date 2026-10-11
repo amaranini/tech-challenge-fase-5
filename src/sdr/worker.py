@@ -15,6 +15,7 @@ import signal
 
 from sdr.bootstrap import montar_container
 from sdr.config.settings import obter_settings
+from sdr.core.adapters.logs import instalar_mascara_pii
 
 logger = logging.getLogger("sdr.worker")
 
@@ -25,6 +26,7 @@ async def rodar(parar: asyncio.Event) -> None:
     if container.executar_followups is None:
         logger.warning("A vertical ativa não define cadência de follow-up: nada a fazer")
         return
+    await container.preparar_rastreio()
     logger.info(
         "Worker de follow-up no ar (unidade=%s, intervalo=%ss)",
         settings.followup_unidade,
@@ -44,6 +46,7 @@ async def rodar(parar: asyncio.Event) -> None:
 
 def main() -> None:
     logging.basicConfig(level=obter_settings().log_level, format="%(asctime)s %(name)s %(message)s")
+    instalar_mascara_pii()
     parar = asyncio.Event()
 
     async def principal() -> None:

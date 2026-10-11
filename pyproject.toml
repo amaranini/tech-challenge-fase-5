@@ -15,6 +15,8 @@ dependencies = [
     "pgvector>=0.5.0",
     "openai>=3.24.0",
     "langgraph>=1.2.14",
+    "python-multipart>=0.0.9",
+    "langfuse>=4.17.0",
 ]
 
 [dependency-groups]
@@ -52,6 +54,8 @@ ignore = ["PLR0913", "RUF001", "RUF002", "RUF003"]  # RUF00x: acentos em pt-BR s
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["PLR2004"]
 "migrations/**" = ["N999"]
+# Gerador de dados sintéticos: proporções e limiares fixos de propósito.
+"scripts/**" = ["PLR2004", "PLR0912", "PLR0915"]
 
 # ---------------------------------------------------------------- mypy
 [tool.mypy]

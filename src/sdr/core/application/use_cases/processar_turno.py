@@ -9,20 +9,26 @@
    (ex.: um humano assumiu), descarta a resposta. A ação de atendimento do turno (pedir
    handoff, confirmar, voltar para a IA...) é aplicada com compare-and-set.
 6. Persiste a resposta, marca o lote como PROCESSADO, grava qualificação, negociação de
-   agenda e eventos, e entrega pelo CanalMensagemPort do canal do lead.
+   agenda e eventos, e entrega pelo canal do lead (EntregarMensagem: janela/template).
+   Lote só com anexos (áudio, imagem...): responde o aviso da persona, sem LLM.
 7. Reprograma o follow-up (a cadência conta desta resposta) ou o encerra no opt-out.
 8. Publica os eventos do turno para as reações fora da conversa (PublicadorEventosPort).
 """
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from uuid import UUID
 
 from sdr.core.application.ports.agente import AgenteConversacionalPort, EntradaAgente
-from sdr.core.application.ports.canal import CanalMensagemPort
 from sdr.core.application.ports.catalogo import CatalogoPort
 from sdr.core.application.ports.eventos import PublicadorEventosPort
+from sdr.core.application.ports.observabilidade import (
+    ContextoRastro,
+    RastreioNulo,
+    RastreioPort,
+    Rastro,
+)
 from sdr.core.application.ports.repositorios import (
     ConversaRepository,
     LeadEventoRepository,
@@ -33,11 +39,12 @@ from sdr.core.application.use_cases.atendimento import (
     AplicarAcaoAtendimento,
     AtendimentoAlteradoError,
 )
+from sdr.core.application.use_cases.entregar_mensagem import EntregarMensagem
 from sdr.core.application.use_cases.followup import ProgramarFollowUps
 from sdr.core.domain.agente import Persona, RespostaAgente
+from sdr.core.domain.atendimento import EstadoAtendimento
 from sdr.core.domain.catalogo import ItemCatalogo
-from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem, Papel, StatusMensagem
-from sdr.core.domain.conversa import agora as agora_utc
+from sdr.core.domain.conversa import Conversa, Lead, Mensagem, Papel, StatusMensagem
 
 logger = logging.getLogger(__name__)
 
@@ -68,13 +75,15 @@ class ProcessarTurno:
         persona: Persona,
         trava: TravaTurnoPort,
         agendador: AgendadorTurnoPort,
-        canais: Mapping[Canal, CanalMensagemPort],
+        entrega: EntregarMensagem,
         janela_historico: int = JANELA_HISTORICO_PADRAO,
         max_reprocessamentos: int = MAX_REPROCESSAMENTOS,
         publicador: PublicadorEventosPort | None = None,
         atendimento: AplicarAcaoAtendimento | None = None,
         followups: ProgramarFollowUps | None = None,
+        rastreio: RastreioPort | None = None,
     ) -> None:
+        self._rastreio: RastreioPort = rastreio or RastreioNulo()
         self._followups = followups
         self._publicador = publicador
         self._atendimento = atendimento
@@ -86,7 +95,7 @@ class ProcessarTurno:
         self._persona = persona
         self._trava = trava
         self._agendador = agendador
-        self._canais = canais
+        self._entrega = entrega
         self._janela_historico = janela_historico
         self._max_reprocessamentos = max_reprocessamentos
 
@@ -103,18 +112,44 @@ class ProcessarTurno:
         conversa = await self._conversas.obter_aberta(lead_id) if lead else None
         if lead is None or conversa is None:
             return None
+        contexto = ContextoRastro(
+            "turno",
+            lead.id,
+            lead.canal.value,
+            lead.atendimento_atual.estado.value,
+            lead.qualificacao.intencao_atual,
+            metadados={"prompt_persona": self._persona.versao_prompt},
+        )
+        with self._rastreio.rastrear(contexto) as rastro:
+            resultado = await self._turno(lead, conversa, rastro)
+            if resultado is not None:
+                rastro.saida = resultado.resposta.texto
+                rastro.metadados_finais = {
+                    "intencao_final": resultado.lead.qualificacao.intencao_atual or "indefinida",
+                    "reprocessamentos": str(resultado.reprocessamentos),
+                }
+            return resultado
 
+    async def _turno(self, lead: Lead, conversa: Conversa, rastro: Rastro) -> ResultadoTurno | None:
+        lead_id = lead.id
         for tentativa in range(self._max_reprocessamentos + 1):
             lote = await self._conversas.pendentes(conversa.id)
             if not lote:
                 return None
             ids_lote = {m.id for m in lote}
             historico = await self._conversas.ultimas_mensagens(conversa.id, self._janela_historico)
-            entrada = EntradaAgente(
-                lead=lead, historico=historico, texto="\n".join(m.texto for m in lote)
-            )
+            entrada = EntradaAgente(lead=lead, historico=historico, texto=_texto_do_lote(lote))
+            rastro.entrada = entrada.texto  # as mensagens do lote, agregadas
+            itens: tuple[ItemCatalogo, ...] = ()
+            invalidos: list[str] = []
+            fallback = False
             try:
-                resposta, itens, invalidos, fallback = await self._responder_sem_inventar(entrada)
+                if all(m.metadados.get("somente_midia") for m in lote):
+                    resposta = self._aviso_midia(lead)
+                else:
+                    resposta, itens, invalidos, fallback = await self._responder_sem_inventar(
+                        entrada
+                    )
             except Exception:
                 logger.exception("Falha no turno do lead %s; lote marcado como FALHA", lead_id)
                 await self._conversas.marcar_status([m.id for m in lote], StatusMensagem.FALHA)
@@ -144,6 +179,7 @@ class ProcessarTurno:
                 invalidos=invalidos,
                 fallback=fallback,
                 reprocessamentos=tentativa,
+                rastro=rastro,
             )
         return None  # inalcançável: a última tentativa sempre conclui
 
@@ -158,18 +194,18 @@ class ProcessarTurno:
         invalidos: list[str],
         fallback: bool,
         reprocessamentos: int,
+        rastro: Rastro | None = None,
     ) -> ResultadoTurno | None:
         if not await self._estado_ainda_vale(lead, resposta):
             await self._conversas.marcar_status([m.id for m in lote], StatusMensagem.PROCESSADA)
             return None
         metadados = self._metadados(resposta, itens, invalidos, fallback)
         metadados["responde_a"] = [str(m.id) for m in lote]
-        enviada = Mensagem.nova(
-            conversa.id,
-            Papel.ASSISTENTE,
-            resposta.texto,
-            metadados=metadados,
-            criada_em=agora_utc(),
+        if rastro is not None and rastro.trace_id:
+            metadados["trace"] = {"id": rastro.trace_id, "url": rastro.url}
+        # O lead acabou de falar: sempre dentro da janela (texto livre); a regra é do core.
+        enviada = await self._entrega.preparar(
+            lead, conversa, Papel.ASSISTENTE, resposta.texto, metadados
         )
         await self._conversas.adicionar_mensagem(enviada)
         await self._conversas.marcar_status([m.id for m in lote], StatusMensagem.PROCESSADA)
@@ -188,11 +224,7 @@ class ProcessarTurno:
             await self._leads.salvar(lead)
         await self._eventos.registrar(resposta.eventos)
 
-        canal = self._canais.get(lead.canal)
-        if canal is None:
-            logger.error("Sem CanalMensagemPort para o canal %s", lead.canal)
-        else:
-            await canal.enviar(lead, enviada)
+        await self._entrega.transmitir(lead, enviada)
         # Follow-up: a cadência recomeça desta resposta (ou acaba, se o lead pediu para parar).
         if self._followups is not None:
             if resposta.opt_out:
@@ -212,6 +244,13 @@ class ProcessarTurno:
             resposta.campos_faltantes,
             reprocessamentos,
         )
+
+    def _aviso_midia(self, lead: Lead) -> RespostaAgente:
+        """Só anexos no lote: o assistente ainda não entende áudio/imagem — avisa, sem LLM.
+        Com uma pessoa da equipe no atendimento, a IA continua em silêncio."""
+        if lead.atendimento_atual.estado is EstadoAtendimento.ATENDIMENTO_HUMANO:
+            return RespostaAgente(texto="", silenciar=True)
+        return RespostaAgente(texto=self._persona.aviso_midia, metadados={"aviso_midia": True})
 
     async def _estado_ainda_vale(self, lead: Lead, resposta: RespostaAgente) -> bool:
         """Recheca o atendimento antes de enviar e aplica a ação do turno (compare-and-set).
@@ -312,3 +351,23 @@ class ProcessarTurno:
         if fallback:
             metadados["fallback"] = True
         return metadados
+
+
+def _texto_do_lote(lote: Sequence[Mensagem]) -> str:
+    """Falas do lote para o agente. Anexos viram uma nota (o agente não os abre)."""
+    textos: list[str] = []
+    anexos: list[str] = []
+    for m in lote:
+        midias = m.metadados.get("midias")
+        if isinstance(midias, list) and midias:
+            if texto := str(m.metadados.get("texto_lead") or "").strip():
+                textos.append(texto)
+            anexos.extend(str(midia.get("tipo", "anexo")) for midia in midias)
+        else:
+            textos.append(m.texto)
+    if anexos:
+        textos.append(
+            f"(o lead também enviou anexo: {', '.join(anexos)} — você não consegue abrir "
+            "anexos; se fizer diferença, diga em poucas palavras que por enquanto só lê texto)"
+        )
+    return "\n".join(textos)

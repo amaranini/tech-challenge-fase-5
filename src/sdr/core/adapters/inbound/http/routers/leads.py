@@ -16,6 +16,7 @@ from sdr.core.adapters.inbound.http.dependencias import (
     obter_obter_lead,
     obter_obter_resumo,
 )
+from sdr.core.adapters.inbound.http.lead_publico import id_publico, identificar
 from sdr.core.adapters.inbound.http.routers.agendamentos import AgendamentoResposta
 from sdr.core.adapters.inbound.http.routers.atendimentos import AtendimentoResposta
 from sdr.core.application.use_cases.consultar_agenda_e_resumo import ObterResumo
@@ -30,6 +31,8 @@ router = APIRouter(tags=["leads"])
 
 class LeadResumo(BaseModel):
     lead_id: str
+    canal: Canal
+    nome: str | None
     criado_em: datetime
     total_mensagens: int
     ultima_interacao_em: datetime | None
@@ -91,7 +94,7 @@ class LeadDetalhe(BaseModel):
     def de_estado(cls, estado: EstadoLead) -> "LeadDetalhe":
         lead, q = estado.lead, estado.lead.qualificacao
         return cls(
-            lead_id=lead.remetente_id,
+            lead_id=id_publico(lead),
             canal=lead.canal,
             nome=lead.nome,
             criado_em=lead.criado_em,
@@ -106,7 +109,7 @@ class LeadDetalhe(BaseModel):
             qualificado_em=q.qualificado_em,
             eventos=[EventoResposta.de_dominio(e) for e in estado.eventos],
             agendamento=(
-                AgendamentoResposta.de_dominio(estado.agendamento, lead.remetente_id)
+                AgendamentoResposta.de_dominio(estado.agendamento, id_publico(lead))
                 if estado.agendamento
                 else None
             ),
@@ -123,11 +126,15 @@ class LeadDetalhe(BaseModel):
 async def listar_leads(
     listar: Annotated[ListarLeads, Depends(obter_listar_leads)],
     limite: Annotated[int, Query(ge=1, le=200)] = 50,
+    canal: Canal | None = None,
 ) -> list[LeadResumo]:
-    resumos = await listar.executar(Canal.WEB, limite)
+    """Mais recentes primeiro; todos os canais (ou só `canal`)."""
+    resumos = await listar.executar(canal, limite)
     return [
         LeadResumo(
-            lead_id=r.lead.remetente_id,
+            lead_id=id_publico(r.lead),
+            canal=r.lead.canal,
+            nome=r.lead.nome,
             criado_em=r.lead.criado_em,
             total_mensagens=r.total_mensagens,
             ultima_interacao_em=r.ultima_interacao_em,
@@ -145,7 +152,7 @@ async def obter_lead(
     lead_id: Annotated[str, Path(min_length=1, max_length=100)],
     obter: Annotated[ObterLead, Depends(obter_obter_lead)],
 ) -> LeadDetalhe:
-    estado = await obter.executar(Canal.WEB, lead_id)
+    estado = await obter.executar(*identificar(lead_id))
     if estado is None:
         raise HTTPException(404, f"lead {lead_id!r} não encontrado")
     return LeadDetalhe.de_estado(estado)
@@ -204,7 +211,7 @@ async def obter_resumo(
     versao: Annotated[int | None, Query(ge=1)] = None,
 ) -> ResumoResposta:
     """Resumo para o responsável (última versão, ou `?versao=N`)."""
-    encontrado = await obter.executar(Canal.WEB, lead_id, versao)
+    encontrado = await obter.executar(*identificar(lead_id), versao)
     if encontrado is None:
         raise HTTPException(404, f"lead {lead_id!r} não encontrado")
     if encontrado.resumo is None:

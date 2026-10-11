@@ -99,19 +99,19 @@ Cada árvore é um hexágono: o core inteiro, e cada fatia da vertical (`catalog
 flowchart TB
     subgraph clientes[Clientes]
         web[web/ Streamlit]
-        wpp[WhatsApp webhook]:::futuro
+        wpp[WhatsApp — Twilio<br/>webhook + status]
     end
 
     subgraph core[sdr.core]
         subgraph cin[adapters/inbound]
-            http[http — app FastAPI<br/>/health · /conversas · /leads · /leads/&#123;id&#125;]
+            http[http — app FastAPI<br/>/health · /conversas · /leads · /leads/&#123;id&#125;<br/>/webhooks/whatsapp/twilio — assinatura + idempotência]
         end
         subgraph capp[application — sem frameworks]
-            cuc[use_cases<br/>ReceberMensagem · ProcessarTurno · ObterHistorico<br/>ListarLeads · ObterLead · RecuperarTurnosPendentes · VerificarSaude<br/>ConduzirAgendamento · GerarResumoHandoff · ObterResumo · ListarAgendamentos]
+            cuc[use_cases<br/>ReceberMensagem · ProcessarTurno · ObterHistorico<br/>ListarLeads · ObterLead · RecuperarTurnosPendentes · VerificarSaude<br/>ConduzirAgendamento · GerarResumoHandoff · ObterResumo · ListarAgendamentos<br/>EntregarMensagem — janela 24h: texto livre × template · AtualizarStatusEntrega]
             cports{{ports<br/>CatalogoPort · EmbeddingPort · LLMPort · Ferramenta<br/>LeadRepository · ConversaRepository · LeadEventoRepository<br/>AgenteConversacionalPort · AgendadorTurnoPort · TravaTurnoPort · CanalMensagemPort<br/>AgendaPort · RelogioPort · CRMPort · RedatorResumoPort · ResumoRepository · PublicadorEventosPort}}
             cferr[ferramentas<br/>FerramentaBuscarCatalogo]
         end
-        cdom[domain — sem frameworks<br/>Lead · Conversa · Mensagem · Persona · ItemCatalogo<br/>Qualificacao · Score · EventoLead<br/>Responsavel · Slot · Agendamento · NegociacaoAgenda]
+        cdom[domain — sem frameworks<br/>Lead · Conversa · Mensagem · Persona · ItemCatalogo<br/>Qualificacao · Score · EventoLead<br/>Responsavel · Slot · Agendamento · NegociacaoAgenda<br/>TemplateLogico · validador de variáveis · PII]
         subgraph cout[adapters/outbound]
             persist[persistence<br/>engine · Base ORM · leads/conversas/mensagens/lead_eventos<br/>AgendaPostgres — mock: responsaveis/slots_agenda/agendamentos<br/>resumos_handoff · CRMPostgresMock — crm_registros + log JSON]
             emb[embeddings<br/>fastembed]

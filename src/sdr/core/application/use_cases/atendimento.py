@@ -9,12 +9,11 @@ o lido?) e registra/publica os eventos. Se outro ator mudou o estado no meio, le
 - Pela equipe (HTTP): AssumirAtendimento, DevolverAtendimento, EnviarMensagemResponsavel.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime
 from uuid import UUID
 
-from sdr.core.application.ports.canal import CanalMensagemPort
 from sdr.core.application.ports.eventos import PublicadorEventosPort
 from sdr.core.application.ports.relogio import RelogioPort
 from sdr.core.application.ports.repositorios import (
@@ -22,6 +21,7 @@ from sdr.core.application.ports.repositorios import (
     LeadEventoRepository,
     LeadRepository,
 )
+from sdr.core.application.use_cases.entregar_mensagem import EntregarMensagem
 from sdr.core.domain.atendimento import (
     AcaoAtendimento,
     Atendimento,
@@ -30,7 +30,8 @@ from sdr.core.domain.atendimento import (
     TipoAcaoAtendimento,
 )
 from sdr.core.domain.conversa import Canal, Lead, Mensagem, Papel
-from sdr.core.domain.eventos import EventoLead
+from sdr.core.domain.eventos import EventoLead, TipoEvento
+from sdr.core.domain.template import TemplateLogico
 
 Operacao = Callable[[Atendimento, datetime], tuple[Atendimento, list[EventoLead]]]
 
@@ -231,17 +232,21 @@ class AtendimentoNaoAssumidoError(RuntimeError):
 
 
 class EnviarMensagemResponsavel:
+    """A pessoa da equipe escreve ao lead, pelo canal dele. Fora da janela de conversa do
+    canal, o texto livre não pode sair: vai o template de retomada da vertical (o texto
+    da pessoa fica registrado para a equipe)."""
+
     def __init__(
         self,
         leads: LeadRepository,
         conversas: ConversaRepository,
-        canais: Mapping[Canal, CanalMensagemPort],
-        relogio: RelogioPort,
+        entrega: EntregarMensagem,
+        template_fora_da_janela: TemplateLogico | None = None,
     ) -> None:
         self._leads = leads
         self._conversas = conversas
-        self._canais = canais
-        self._relogio = relogio
+        self._entrega = entrega
+        self._template = template_fora_da_janela
 
     async def executar(
         self, canal: Canal, remetente_id: str, texto: str, responsavel: str | None = None
@@ -257,18 +262,19 @@ class EnviarMensagemResponsavel:
         conversa = await self._conversas.obter_aberta(lead.id)
         if conversa is None:
             raise LeadNaoEncontradoError(f"{remetente_id} sem conversa aberta")
-        momento = self._relogio.agora()
-        mensagem = Mensagem.nova(
-            conversa.id,
+        quem = responsavel or atendimento.responsavel
+        mensagem = await self._entrega.preparar(
+            lead,
+            conversa,
             Papel.RESPONSAVEL,
             texto.strip(),
-            metadados={"responsavel": responsavel or atendimento.responsavel},
-            criada_em=momento,
+            {"responsavel": quem},
+            template=self._template,
+            contexto=self._entrega.contexto(lead, responsavel=quem),
         )
         await self._conversas.adicionar_mensagem(mensagem)
-        await self._conversas.salvar(conversa.tocar(momento))
-        if (canal_saida := self._canais.get(lead.canal)) is not None:
-            await canal_saida.enviar(lead, mensagem)
+        await self._conversas.salvar(conversa.tocar(mensagem.criada_em))
+        await self._entrega.transmitir(lead, mensagem)
         return mensagem
 
 
@@ -276,18 +282,38 @@ class EnviarMensagemResponsavel:
 class ItemFila:
     lead: Lead
     espera_segundos: int
+    sla_excedido: bool = False  # HandoffSLAExcedido desta entrada na fila
 
 
 class ListarAtendimentos:
     """Fila (aguardando humano, por tempo de espera) e quem está em atendimento humano."""
 
-    def __init__(self, leads: LeadRepository, relogio: RelogioPort) -> None:
+    def __init__(
+        self,
+        leads: LeadRepository,
+        relogio: RelogioPort,
+        eventos: LeadEventoRepository | None = None,
+    ) -> None:
         self._leads = leads
         self._relogio = relogio
+        self._eventos = eventos
+
+    async def _sla_excedido(self, lead: Lead) -> bool:
+        desde = lead.atendimento_atual.na_fila_desde
+        if self._eventos is None or desde is None:
+            return False
+        return any(
+            e.tipo is TipoEvento.HANDOFF_SLA_EXCEDIDO
+            and e.payload.get("na_fila_desde") == desde.isoformat()
+            for e in await self._eventos.listar(lead.id)
+        )
 
     async def executar(
         self, estados: tuple[EstadoAtendimento, ...] = (EstadoAtendimento.AGUARDANDO_HUMANO,)
     ) -> list[ItemFila]:
         agora = self._relogio.agora()
         leads = await self._leads.listar_por_atendimento(estados)
-        return [ItemFila(ld, ld.atendimento_atual.espera(agora)) for ld in leads]
+        return [
+            ItemFila(ld, ld.atendimento_atual.espera(agora), await self._sla_excedido(ld))
+            for ld in leads
+        ]

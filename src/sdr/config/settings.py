@@ -1,6 +1,7 @@
 from functools import lru_cache
+from typing import Any
 
-from pydantic import SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -65,6 +66,36 @@ class Settings(BaseSettings):
     followup_lembrete_horas: float = 24.0  # lembrete do agendamento, tantas horas antes
     janela_conversa_horas: float = 24.0  # depois disso, mensagem ativa exige template
     handoff_sla_minutos: int = 15  # espera máxima na fila (tempo útil) antes do alerta
+
+    # Canal WhatsApp (vazio = desligado; webhook responde 404)
+    whatsapp_provedor: str | None = None  # meta | twilio
+    public_base_url: str | None = None  # URL pública (túnel/proxy): assinatura e callbacks
+    twilio_account_sid: str | None = None
+    twilio_auth_token: SecretStr | None = None
+    twilio_whatsapp_from: str = "whatsapp:+14155238886"  # número do Sandbox
+    twilio_validar_assinatura: bool = True
+    # Meta (Cloud API oficial): app em developers.facebook.com com o produto WhatsApp
+    meta_access_token: SecretStr | None = None
+    meta_phone_number_id: str | None = None
+    meta_app_secret: SecretStr | None = None  # assinatura X-Hub-Signature-256 do webhook
+    meta_verify_token: SecretStr | None = None  # handshake ao cadastrar o webhook
+    meta_versao_graph: str = "v22.0"
+    meta_validar_assinatura: bool = True
+    # Por mensagem; acima disso, divide (vazio = do provedor: Twilio 1600, Meta 4096)
+    whatsapp_limite_caracteres: int | None = None
+    # Nome lógico (da vertical) → template aprovado no provedor. JSON, ex.:
+    # {"imob_lembrete_agendamento": {"content_sid": "HX...", "idioma": "pt_BR",
+    #   "variaveis": ["primeiro_nome", "compromisso", "com_quem", "quando", "onde"]}}
+    whatsapp_templates: dict[str, dict[str, Any]] = {}
+    template_variavel_max_caracteres: int = 200  # validador de variáveis de template
+
+    # Observabilidade (Langfuse). Sem as chaves, nada é enviado (no-op).
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: SecretStr | None = None
+    langfuse_host: str = Field(  # EU; US: https://us.cloud.langfuse.com
+        default="https://cloud.langfuse.com",
+        validation_alias=AliasChoices("LANGFUSE_BASE_URL", "LANGFUSE_HOST"),
+    )
 
     # CRM mock (Postgres + log JSON Lines). Produção: HubSpot ou outro CRM.
     crm_mock_log: str | None = "var/crm_mock.jsonl"

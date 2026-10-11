@@ -5,8 +5,9 @@ Hoje o contrato tem só o necessário: catálogo, rotas, carga inicial, persona 
 versionado), ferramentas do agente, qualificação (intenções com schema, prioridade de
 campos e prompt do especialista; regras de scoring e critério de qualificado; prompt de
 descoberta) e agenda (quem atende cada lead, o que se agenda em cada intenção e os
-responsáveis iniciais do mock), o template do resumo para o responsável e o follow-up
-(cadência por situação do lead e a busca de "algo novo" a partir da ficha).
+responsáveis iniciais do mock), o template do resumo para o responsável, o follow-up
+(cadência por situação do lead e a busca de "algo novo" a partir da ficha) e os templates
+lógicos das mensagens ativas fora da janela de conversa do canal (WhatsApp).
 """
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -25,6 +26,7 @@ from sdr.core.domain.catalogo import ConsultaCatalogo
 from sdr.core.domain.followup import Cadencia, ModeloLembrete, SituacaoLead
 from sdr.core.domain.qualificacao import Ficha, IntencaoVertical, RegrasQualificacao
 from sdr.core.domain.resumo import TemplateResumo
+from sdr.core.domain.template import TemplateLogico
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,22 @@ class VerticalMontada:
     cadencias_followup: Mapping[SituacaoLead, Cadencia] = field(default_factory=dict)
     consulta_followup: Callable[[str, Ficha], ConsultaCatalogo | None] | None = None
     lembrete_agendamento: ModeloLembrete | None = None  # sem ele, não há lembrete
+    # Canal com janela de conversa (WhatsApp): a resposta da equipe fora da janela sai por
+    # este template (sem ele, fica registrada como não enviada).
+    template_resposta_responsavel: TemplateLogico | None = None
+
+    @property
+    def templates(self) -> tuple[TemplateLogico, ...]:
+        """Todos os templates lógicos declarados (sem repetição) — base do documento de
+        submissão à Meta e da conferência do mapeamento na config da operação."""
+        vistos: dict[str, TemplateLogico] = {}
+        etapas = [e.template for c in self.cadencias_followup.values() for e in c.etapas]
+        extras = [self.lembrete_agendamento.template] if self.lembrete_agendamento else []
+        if self.template_resposta_responsavel:
+            extras.append(self.template_resposta_responsavel)
+        for template in [*etapas, *extras]:
+            vistos.setdefault(template.nome, template)
+        return tuple(vistos.values())
 
 
 class VerticalPack(Protocol):

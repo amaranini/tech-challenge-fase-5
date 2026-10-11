@@ -3,14 +3,18 @@
 Uso:
     uv run python -m sdr.cli seed                     # do host (banco em localhost:5433)
     docker compose exec api python -m sdr.cli seed
+    uv run python -m sdr.cli templates-doc            # gera docs/whatsapp-templates.md
 """
 
 import argparse
 import asyncio
 import logging
 import time
+from pathlib import Path
 
-from sdr.bootstrap import montar_container
+from sdr.bootstrap import montar_container, texto_templates_whatsapp
+
+DOC_TEMPLATES = Path("docs/whatsapp-templates.md")
 
 
 async def _seed() -> None:
@@ -29,7 +33,14 @@ async def _seed() -> None:
         await container.encerrar()
 
 
-COMANDOS = {"seed": _seed}
+async def _templates_doc() -> None:
+    """Textos de referência dos templates lógicos da vertical ativa, para a Meta."""
+    texto = texto_templates_whatsapp()
+    await asyncio.to_thread(DOC_TEMPLATES.write_text, texto, encoding="utf-8")
+    logging.info("%s atualizado", DOC_TEMPLATES)
+
+
+COMANDOS = {"seed": _seed, "templates-doc": _templates_doc}
 
 
 def main() -> None:
