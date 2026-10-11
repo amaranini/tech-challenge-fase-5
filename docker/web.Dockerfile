@@ -14,6 +14,7 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --only-group web --no-install-project
 
+COPY .streamlit ./.streamlit
 COPY web ./web
 
 EXPOSE 8501

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, Request
 
+from sdr.core.application.consultas.painel import ConsultarPainel
 from sdr.core.application.use_cases.atendimento import (
     AssumirAtendimento,
     DevolverAtendimento,
@@ -25,6 +26,10 @@ if TYPE_CHECKING:
     from sdr.core.adapters.inbound.http.routers.whatsapp_twilio import WebhookTwilio
 
 
+def _sem_painel() -> ConsultarPainel:
+    raise HTTPException(404, "consultas do painel não configuradas")
+
+
 @dataclass(frozen=True)
 class Dependencias:
     """Fábricas dos casos de uso do core, injetadas pelo composition root (bootstrap).
@@ -44,8 +49,13 @@ class Dependencias:
     devolver_atendimento: Callable[[], DevolverAtendimento]
     enviar_mensagem_responsavel: Callable[[], EnviarMensagemResponsavel]
     programar_followups: Callable[[], ProgramarFollowUps | None]
+    consultar_painel: Callable[[], ConsultarPainel] = field(default=_sem_painel)
     whatsapp_twilio: "Callable[[], WebhookTwilio | None]" = field(default=lambda: None)
     whatsapp_meta: "Callable[[], WebhookMeta | None]" = field(default=lambda: None)
+
+
+def obter_consultar_painel(request: Request) -> ConsultarPainel:
+    return obter_dependencias(request).consultar_painel()
 
 
 def obter_dependencias(request: Request) -> Dependencias:

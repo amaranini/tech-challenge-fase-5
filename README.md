@@ -144,6 +144,24 @@ latência). Telefone, e-mail e CPF são mascarados antes do envio
 
 Sem as chaves, nada é enviado.
 
+### Dashboard
+
+http://localhost:8501 abre o dashboard (Streamlit multipágina, só via API):
+**Visão geral** (KPIs, funil, intenção, score, canal), **Leads** (tabela filtrável +
+detalhe com conversa, ficha, score e motivos, timeline, resumo, agendamentos,
+follow-ups e link para o trace), **Fila de atendimento** (espera, SLA excedido, assumir,
+responder, devolver), **Agenda** (por responsável e por dia) e **Follow-ups**
+(pendentes, enviados, reengajamento, opt-outs). O chat com a Lia fica em
+*Demonstração → Chat com a Lia*. Período na barra lateral (padrão: 14 dias).
+
+```bash
+make seed-demo      # ~40 leads sintéticos nos últimos 14 dias (marcados como demo)
+make limpar-demo    # remove todos os dados de demo
+```
+
+API: `GET /painel/visao-geral`, `GET /painel/leads`, `GET /painel/followups`
+(`?inicio=&fim=` em ISO 8601) — [ADR 014](docs/adr/014-dashboard-consultas.md).
+
 ## Desenvolvimento
 
 ```bash

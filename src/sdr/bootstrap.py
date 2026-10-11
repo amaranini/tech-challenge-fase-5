@@ -49,6 +49,7 @@ from sdr.core.adapters.outbound.llm.openai_adapter import LLMOpenAI
 from sdr.core.adapters.outbound.observabilidade.langfuse_rastreio import RastreioLangfuse
 from sdr.core.adapters.outbound.observabilidade.llm_observado import LLMObservado
 from sdr.core.adapters.outbound.persistence.agenda_postgres import AgendaPostgres
+from sdr.core.adapters.outbound.persistence.consultas_painel_sql import ConsultasPainelSql
 from sdr.core.adapters.outbound.persistence.crm_postgres import CRMPostgresMock
 from sdr.core.adapters.outbound.persistence.database import criar_engine, criar_fabrica_sessao
 from sdr.core.adapters.outbound.persistence.followups_sql import FollowUpRepositorySql
@@ -65,6 +66,7 @@ from sdr.core.adapters.outbound.persistence.verificador_saude_postgres import (
 )
 from sdr.core.adapters.outbound.relogio import RelogioSistema
 from sdr.core.adapters.outbound.turnos.agendador_debounce import AgendadorDebounce
+from sdr.core.application.consultas.painel import ConsultarPainel
 from sdr.core.application.ports.canal import CanalMensagemPort
 from sdr.core.application.ports.llm import LLMPort
 from sdr.core.application.ports.observabilidade import RastreioNulo, RastreioPort
@@ -346,6 +348,7 @@ class Container:
     webhook_twilio: WebhookTwilio | None
     webhook_meta: WebhookMeta | None
     rastreio: RastreioPort
+    consultar_painel: ConsultarPainel
     whatsapp: CanalWhatsApp | None
     agenda: AgendaPostgres
     relogio: RelogioSistema
@@ -570,7 +573,7 @@ def montar_container(settings: Settings | None = None) -> Container:
         listar_agendamentos=ListarAgendamentos(agenda, leads),
         publicador=publicador,
         gerar_resumo=gerar_resumo,
-        listar_atendimentos=ListarAtendimentos(leads, relogio),
+        listar_atendimentos=ListarAtendimentos(leads, relogio, eventos),
         assumir_atendimento=AssumirAtendimento(leads, eventos, relogio, publicador),
         devolver_atendimento=DevolverAtendimento(leads, eventos, relogio, publicador),
         enviar_mensagem_responsavel=EnviarMensagemResponsavel(
@@ -584,6 +587,7 @@ def montar_container(settings: Settings | None = None) -> Container:
         webhook_twilio=webhook_twilio,
         webhook_meta=webhook_meta,
         rastreio=rastreio,
+        consultar_painel=ConsultarPainel(ConsultasPainelSql(sessoes)),
         whatsapp=whatsapp,
         agenda=agenda,
         relogio=relogio,
@@ -625,6 +629,7 @@ def criar_aplicacao(settings: Settings | None = None) -> FastAPI:
             devolver_atendimento=lambda: container.devolver_atendimento,
             enviar_mensagem_responsavel=lambda: container.enviar_mensagem_responsavel,
             programar_followups=lambda: container.programar_followups,
+            consultar_painel=lambda: container.consultar_painel,
             whatsapp_twilio=lambda: container.webhook_twilio,
             whatsapp_meta=lambda: container.webhook_meta,
         ),

@@ -54,6 +54,8 @@ ignore = ["PLR0913", "RUF001", "RUF002", "RUF003"]  # RUF00x: acentos em pt-BR s
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["PLR2004"]
 "migrations/**" = ["N999"]
+# Gerador de dados sintéticos: proporções e limiares fixos de propósito.
+"scripts/**" = ["PLR2004", "PLR0912", "PLR0915"]
 
 # ---------------------------------------------------------------- mypy
 [tool.mypy]

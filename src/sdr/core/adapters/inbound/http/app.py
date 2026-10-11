@@ -11,6 +11,7 @@ from sdr.core.adapters.inbound.http.routers import (
     demo,
     health,
     leads,
+    painel,
     whatsapp_meta,
     whatsapp_twilio,
 )
@@ -41,6 +42,7 @@ def criar_app(
     app.include_router(agendamentos.router)
     app.include_router(atendimentos.router)
     app.include_router(demo.router)
+    app.include_router(painel.router)
     app.include_router(whatsapp_twilio.router)
     app.include_router(whatsapp_meta.router)
     for router in routers:

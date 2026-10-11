@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck imports test check up down logs migrate seed busca e2e llm
+.PHONY: seed-demo limpar-demo install lint format typecheck imports test check up down logs migrate seed busca e2e llm
 
 install:
 	uv sync
@@ -36,6 +36,13 @@ migrate:
 
 seed:
 	docker compose exec api python -m sdr.cli seed
+
+# Dashboard: ~40 leads sintéticos nos últimos 14 dias (marcados como demo; rode `make seed` antes)
+seed-demo:
+	uv run python scripts/seed_demo.py
+
+limpar-demo:
+	uv run python scripts/seed_demo.py --remover
 
 q ?= apê 2 quartos zona sul até 800 mil perto do metrô
 busca:

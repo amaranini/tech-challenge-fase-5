@@ -59,6 +59,7 @@ class ItemFilaResposta(BaseModel):
     canal: Canal
     nome: str | None
     espera_segundos: int
+    sla_excedido: bool = Field(description="Passou do SLA da fila (HandoffSLAExcedido)")
     atendimento: AtendimentoResposta
     intencao: str | None
     score: int | None
@@ -72,6 +73,7 @@ class ItemFilaResposta(BaseModel):
             canal=lead.canal,
             nome=lead.nome,
             espera_segundos=item.espera_segundos,
+            sla_excedido=item.sla_excedido,
             atendimento=AtendimentoResposta.de_dominio(lead.atendimento_atual),
             intencao=q.intencao_atual,
             score=q.score.pontos if q.score else None,

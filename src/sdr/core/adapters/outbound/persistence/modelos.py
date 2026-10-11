@@ -45,6 +45,8 @@ class LeadModel(Base):
     na_fila_desde: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     atendimento: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
     opt_out_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Dado sintético do dashboard (scripts/seed_demo.py --remover apaga todos).
+    demo: Mapped[bool] = mapped_column(Boolean, server_default="false")
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     atualizado_em: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -53,6 +55,7 @@ class LeadModel(Base):
     __table_args__ = (
         UniqueConstraint("canal", "remetente_id", name="uq_leads_canal_remetente"),
         Index("ix_leads_atendimento_fila", "atendimento_estado", "na_fila_desde"),
+        Index("ix_leads_criado_em", "criado_em"),
     )
 
 

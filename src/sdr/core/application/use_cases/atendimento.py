@@ -30,7 +30,7 @@ from sdr.core.domain.atendimento import (
     TipoAcaoAtendimento,
 )
 from sdr.core.domain.conversa import Canal, Lead, Mensagem, Papel
-from sdr.core.domain.eventos import EventoLead
+from sdr.core.domain.eventos import EventoLead, TipoEvento
 from sdr.core.domain.template import TemplateLogico
 
 Operacao = Callable[[Atendimento, datetime], tuple[Atendimento, list[EventoLead]]]
@@ -282,18 +282,38 @@ class EnviarMensagemResponsavel:
 class ItemFila:
     lead: Lead
     espera_segundos: int
+    sla_excedido: bool = False  # HandoffSLAExcedido desta entrada na fila
 
 
 class ListarAtendimentos:
     """Fila (aguardando humano, por tempo de espera) e quem está em atendimento humano."""
 
-    def __init__(self, leads: LeadRepository, relogio: RelogioPort) -> None:
+    def __init__(
+        self,
+        leads: LeadRepository,
+        relogio: RelogioPort,
+        eventos: LeadEventoRepository | None = None,
+    ) -> None:
         self._leads = leads
         self._relogio = relogio
+        self._eventos = eventos
+
+    async def _sla_excedido(self, lead: Lead) -> bool:
+        desde = lead.atendimento_atual.na_fila_desde
+        if self._eventos is None or desde is None:
+            return False
+        return any(
+            e.tipo is TipoEvento.HANDOFF_SLA_EXCEDIDO
+            and e.payload.get("na_fila_desde") == desde.isoformat()
+            for e in await self._eventos.listar(lead.id)
+        )
 
     async def executar(
         self, estados: tuple[EstadoAtendimento, ...] = (EstadoAtendimento.AGUARDANDO_HUMANO,)
     ) -> list[ItemFila]:
         agora = self._relogio.agora()
         leads = await self._leads.listar_por_atendimento(estados)
-        return [ItemFila(ld, ld.atendimento_atual.espera(agora)) for ld in leads]
+        return [
+            ItemFila(ld, ld.atendimento_atual.espera(agora), await self._sla_excedido(ld))
+            for ld in leads
+        ]

@@ -79,6 +79,8 @@ src/sdr/
                            ContextoTemplate, validador e preenchimento com fallback), pii.py
                            (mascarar telefone/e-mail/CPF)
     application/
+      consultas/           read models do dashboard (painel.py: Periodo, funil por coorte,
+                           ConsultasPainelPort, ConsultarPainel) — só leitura, ADR 014
       ports/               Protocols: CatalogoPort, EmbeddingPort, VerificadorSaudePort, LLMPort
                            (texto + saída estruturada), AgenteConversacionalPort, Ferramenta,
                            LeadRepository, ConversaRepository, LeadEventoRepository,
@@ -184,9 +186,11 @@ src/sdr/
   main.py                  entrypoint ASGI (uvicorn sdr.main:app)
   cli.py                   python -m sdr.cli seed — carga inicial do catálogo da vertical;
                            templates-doc — gera docs/whatsapp-templates.md
-web/                       Streamlit: chat + painel (qualificação, atendimento, agendamento,
-                           follow-up) + tela "Fila" da equipe (resumo para o corretor,
-                           assumir, responder, devolver) — SOMENTE via API HTTP
+web/                       Streamlit multipágina — SOMENTE via API HTTP: app.py (navegação),
+                           comum.py (API, vocabulário, componentes, gráficos), paginas/
+                           (visao_geral, leads + detalhe, fila, agenda, followups, chat);
+                           tema em .streamlit/config.toml
+scripts/seed_demo.py       ~40 leads sintéticos (leads.demo) — make seed-demo / limpar-demo
 worker                     `python -m sdr.worker` (src/sdr/worker.py): só o laço de
                            ExecutarFollowUps; serviço `worker` no compose (mesma imagem)
 migrations/                Alembic — histórico ÚNICO para core + verticais
@@ -279,6 +283,11 @@ docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
   - Um rastro por turno, follow-up enviado e resumo redigido; etapa por nó do grafo;
     geração por chamada ao LLM (bootstrap embrulha o LLM de cada nó). `trace` vai na
     mensagem (id + url). session = lead_id, user = hash; PII mascarada antes de sair.
+- **Dashboard (ADR 014)**
+  - Consultas (read models) em `core/application/consultas/`, separadas dos comandos;
+    agregação em SQL (`ConsultasPainelSql`) sobre lead_eventos + tabelas existentes.
+  - Funil por coorte (leads criados no período; etapa mais avançada conta nas anteriores).
+  - Front só via API; página nova = script em `web/paginas/` + entrada no `st.navigation`.
 - **Qualificação (ADR 005)**
   - Regras universais (troca de intenção, merge, faltantes, eventos) no agregado
     `Qualificacao` do domínio; nós do grafo só orquestram. Scoring/critério são da vertical.
@@ -330,6 +339,8 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
   variaveis), `TEMPLATE_VARIAVEL_MAX_CARACTERES`. Passo a passo no README.
 - Langfuse: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` (vazio = no-op);
   link "🔎 trace" em cada resposta no chat/Fila.
+- Dashboard: http://localhost:8501 (Visão geral, Leads, Fila, Agenda, Follow-ups, Chat);
+  `make seed-demo` (precisa do `make seed`) e `make limpar-demo`; `GET /painel/*`.
 - `make busca q="apê 2 quartos zona sul até 800 mil perto do metrô"` — testa POST /imoveis/busca.
 - Debounce: `DEBOUNCE_SEGUNDOS` (5) e `DEBOUNCE_MAX_SEGUNDOS` (20).
 - Follow-up: `FOLLOWUP_UNIDADE=dias|minutos` (demo), `FOLLOWUP_RESPEITAR_HORARIO`,
