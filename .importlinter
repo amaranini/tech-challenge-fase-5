@@ -108,6 +108,8 @@ forbidden_modules =
     openai
     langgraph
     langchain_core
+    langfuse
+    opentelemetry
 
 # 6. Adapters de entrada e de saída do core não se conhecem.
 [importlinter:contract:adapters-independentes]

@@ -128,6 +128,22 @@ o `PUBLIC_BASE_URL`). Assinatura inválida ⇒ 403 no log da API. Templates para
 [docs/whatsapp-templates.md](docs/whatsapp-templates.md) (gerado por
 `uv run python -m sdr.cli templates-doc`). Telefones aparecem mascarados nos logs.
 
+### Observabilidade (Langfuse)
+
+Cada turno, follow-up e resumo vira um trace no Langfuse, agrupado pela sessão do lead:
+um span por nó do grafo e uma geração por chamada ao LLM (modelo, tokens, custo e
+latência). Telefone, e-mail e CPF são mascarados antes do envio
+([ADR 013](docs/adr/013-observabilidade-langfuse.md)).
+
+1. Crie uma conta grátis em [cloud.langfuse.com](https://cloud.langfuse.com) (ou
+   us.cloud.langfuse.com), um projeto e, em *Settings → API Keys*, um par de chaves.
+2. `.env`: `LANGFUSE_PUBLIC_KEY=pk-lf-...`, `LANGFUSE_SECRET_KEY=sk-lf-...` e
+   `LANGFUSE_BASE_URL` (a região da conta); depois `docker compose up -d --build --wait`.
+3. Converse: cada resposta no chat (e na Fila) tem o link **🔎 trace**; no Langfuse,
+   *Sessions* agrupa a conversa do lead (session = id do lead).
+
+Sem as chaves, nada é enviado.
+
 ## Desenvolvimento
 
 ```bash

@@ -58,6 +58,7 @@ from tests.apoio.fakes import (
     FollowUpRepositoryFake,
     LeadEventoRepositoryFake,
     LeadRepositoryFake,
+    RastreioFake,
     RedatorMensagemAtivaFake,
     RelogioFake,
     TravaFake,
@@ -189,6 +190,7 @@ class Cenario:
         agora: datetime = SEGUNDA_10H,
         lembrete: ModeloLembrete | None = LEMBRETE,
         canal: CanalFake | None = None,
+        rastreio: RastreioFake | None = None,
     ) -> None:
         self.relogio = RelogioFake(agora)
         self.leads = LeadRepositoryFake()
@@ -223,6 +225,7 @@ class Cenario:
             persona=PERSONA,
             config=config,
             consulta_para_ficha=lambda intencao, ficha: ConsultaCatalogo(texto="x"),
+            rastreio=rastreio,
         )
         base = Lead.novo(Canal.WEB, "lead-sumiu")
         self.lead = replace(
@@ -587,3 +590,27 @@ async def test_sem_modelo_de_lembrete_na_vertical_nao_ha_lembrete() -> None:
         ]
     )
     assert c.followups.do_lead(c.lead.id, TipoFollowUp.LEMBRETE_AGENDAMENTO) == []
+
+
+async def test_followup_enviado_tem_rastro_e_o_trace_fica_na_mensagem() -> None:
+    rastreio = RastreioFake()
+    c = Cenario("Oi! Ainda quer o plano no Centro?", rastreio=rastreio)
+    await c.programar.apos_resposta(c.lead)
+    c.relogio.avancar(days=1)
+    await c.executar.executar()
+
+    [(contexto, rastro)] = rastreio.rastros
+    assert (contexto.nome, contexto.lead_id) == ("followup", c.lead.id)
+    assert rastro.saida == "Oi! Ainda quer o plano no Centro?"
+    assert c.enviadas()[0].metadados["trace"] == {"id": "trace-1", "url": "https://lf/t"}
+
+
+async def test_followup_cancelado_nao_abre_rastro() -> None:
+    rastreio = RastreioFake()
+    c = Cenario(rastreio=rastreio)
+    await c.programar.apos_resposta(c.lead)
+    c.relogio.avancar(minutes=5)
+    c.fala(Papel.LEAD, "voltei")  # respondeu: o follow-up cai sem gerar nada
+    c.relogio.avancar(days=1)
+    await c.executar.executar()
+    assert rastreio.rastros == []

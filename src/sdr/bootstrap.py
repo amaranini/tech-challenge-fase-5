@@ -23,6 +23,7 @@ from sdr.core.adapters.inbound.http.routers.whatsapp_meta import WebhookMeta
 from sdr.core.adapters.inbound.http.routers.whatsapp_twilio import WebhookTwilio
 from sdr.core.adapters.logs import instalar_mascara_pii
 from sdr.core.adapters.outbound.agent.agente_qualificador import (
+    VERSOES_PROMPTS,
     AgenteQualificador,
     ConfigQualificacao,
     LLMsPorNo,
@@ -45,6 +46,8 @@ from sdr.core.adapters.outbound.canais.whatsapp_twilio import (
 from sdr.core.adapters.outbound.embeddings.fastembed_adapter import EmbeddingFastembed
 from sdr.core.adapters.outbound.eventos.publicador_asyncio import PublicadorEventosAsyncio
 from sdr.core.adapters.outbound.llm.openai_adapter import LLMOpenAI
+from sdr.core.adapters.outbound.observabilidade.langfuse_rastreio import RastreioLangfuse
+from sdr.core.adapters.outbound.observabilidade.llm_observado import LLMObservado
 from sdr.core.adapters.outbound.persistence.agenda_postgres import AgendaPostgres
 from sdr.core.adapters.outbound.persistence.crm_postgres import CRMPostgresMock
 from sdr.core.adapters.outbound.persistence.database import criar_engine, criar_fabrica_sessao
@@ -64,6 +67,7 @@ from sdr.core.adapters.outbound.relogio import RelogioSistema
 from sdr.core.adapters.outbound.turnos.agendador_debounce import AgendadorDebounce
 from sdr.core.application.ports.canal import CanalMensagemPort
 from sdr.core.application.ports.llm import LLMPort
+from sdr.core.application.ports.observabilidade import RastreioNulo, RastreioPort
 from sdr.core.application.use_cases.atendimento import (
     AplicarAcaoAtendimento,
     AssumirAtendimento,
@@ -128,6 +132,26 @@ ROTA_STATUS_TWILIO = "/webhooks/whatsapp/twilio/status"
 logger = logging.getLogger(__name__)
 
 CanalWhatsApp = CanalWhatsAppTwilio | CanalWhatsAppMeta
+
+
+def _rastreio(settings: Settings, vertical: VerticalMontada) -> RastreioPort:
+    """Langfuse se as chaves existirem; senão, no-op (nada sai do processo)."""
+    secret = _segredo(settings.langfuse_secret_key)
+    if not (settings.langfuse_public_key and secret):
+        logger.info("Observabilidade desligada (sem LANGFUSE_PUBLIC_KEY/SECRET_KEY)")
+        return RastreioNulo()
+    logger.info("Observabilidade: Langfuse em %s", settings.langfuse_host)
+    return RastreioLangfuse.criar(
+        public_key=settings.langfuse_public_key,
+        secret_key=secret,
+        host=settings.langfuse_host,
+        ambiente=settings.ambiente,
+        metadados_fixos={
+            "vertical": settings.vertical,
+            "prompt_persona": vertical.persona.versao_prompt,
+            "prompts_core": VERSOES_PROMPTS,
+        },
+    )
 
 
 def _segredo(valor: SecretStr | None) -> str:
@@ -321,6 +345,7 @@ class Container:
     atualizar_entrega: AtualizarStatusEntrega
     webhook_twilio: WebhookTwilio | None
     webhook_meta: WebhookMeta | None
+    rastreio: RastreioPort
     whatsapp: CanalWhatsApp | None
     agenda: AgendaPostgres
     relogio: RelogioSistema
@@ -340,7 +365,13 @@ class Container:
             fuso=fuso,
         )
 
+    async def preparar_rastreio(self) -> None:
+        """Link dos traces (uma chamada HTTP ao Langfuse; fora do event loop)."""
+        if isinstance(self.rastreio, RastreioLangfuse):
+            await asyncio.to_thread(self.rastreio.preparar)
+
     async def encerrar(self) -> None:
+        await asyncio.to_thread(self.rastreio.encerrar)
         if self.whatsapp is not None:
             await self.whatsapp.fechar()
         await self.agendador.encerrar()
@@ -392,10 +423,16 @@ def montar_container(settings: Settings | None = None) -> Container:
             janela=timedelta(days=settings.agenda_janela_dias),
             sugestoes=settings.agenda_sugestoes,
         )
+    rastreio = _rastreio(settings, vertical)
+
+    def llm_do_no(nome: str, modelo: str | None) -> LLMPort:
+        """LLM de um nó, observado: cada chamada vira uma geração no rastro."""
+        return LLMObservado(criar_llm(settings, modelo or settings.llm_modelo), rastreio, nome)
+
     llms = LLMsPorNo(
-        roteador=criar_llm(settings, settings.llm_model_router or settings.llm_modelo),
-        extracao=criar_llm(settings, settings.llm_model_extraction or settings.llm_modelo),
-        agente=criar_llm(settings, settings.llm_model_agent or settings.llm_modelo),
+        roteador=llm_do_no("roteador", settings.llm_model_router),
+        extracao=llm_do_no("extracao", settings.llm_model_extraction),
+        agente=llm_do_no("agente", settings.llm_model_agent),
     )
     agente = AgenteQualificador(
         llms,
@@ -413,6 +450,7 @@ def montar_container(settings: Settings | None = None) -> Container:
         agenda=conduzir_agendamento,
         relogio=relogio,
         horario=horario,
+        rastreio=rastreio,
     )
 
     # Reações fora do turno: resumo para o responsável + CRM (se a vertical tem template).
@@ -425,9 +463,7 @@ def montar_container(settings: Settings | None = None) -> Container:
             conversas,
             eventos,
             resumos=resumos,
-            redator=RedatorResumoLLM(
-                criar_llm(settings, settings.llm_model_summary or settings.llm_modelo), fuso
-            ),
+            redator=RedatorResumoLLM(llm_do_no("resumo", settings.llm_model_summary), fuso),
             crm=CRMPostgresMock(
                 sessoes, Path(settings.crm_mock_log) if settings.crm_mock_log else None
             ),
@@ -435,6 +471,7 @@ def montar_container(settings: Settings | None = None) -> Container:
             relogio=relogio,
             template=vertical.template_resumo,
             intencoes=vertical.intencoes,
+            rastreio=rastreio,
         )
         publicador.assinar(gerar_resumo.ao_publicar)
 
@@ -473,12 +510,15 @@ def montar_container(settings: Settings | None = None) -> Container:
             eventos=eventos,
             agenda=agenda,
             catalogo=vertical.catalogo,
-            redator=RedatorMensagemAtivaLLM(llms.agente, vertical.persona, fuso),
+            redator=RedatorMensagemAtivaLLM(
+                llm_do_no("followup", settings.llm_model_agent), vertical.persona, fuso
+            ),
             entrega=entrega,
             relogio=relogio,
             persona=vertical.persona,
             config=config_followup,
             consulta_para_ficha=vertical.consulta_followup,
+            rastreio=rastreio,
         )
 
     agendador = AgendadorDebounce(settings.debounce_segundos, settings.debounce_max_segundos)
@@ -496,6 +536,7 @@ def montar_container(settings: Settings | None = None) -> Container:
         publicador=publicador,
         atendimento=AplicarAcaoAtendimento.com(leads, eventos, relogio, publicador),
         followups=programar_followups,
+        rastreio=rastreio,
     )
     agendador.definir_executor(processar_turno.executar)
     receber_mensagem = ReceberMensagem(
@@ -542,6 +583,7 @@ def montar_container(settings: Settings | None = None) -> Container:
         atualizar_entrega=atualizar_entrega,
         webhook_twilio=webhook_twilio,
         webhook_meta=webhook_meta,
+        rastreio=rastreio,
         whatsapp=whatsapp,
         agenda=agenda,
         relogio=relogio,
@@ -561,6 +603,9 @@ def criar_aplicacao(settings: Settings | None = None) -> FastAPI:
     async def semear_agenda() -> None:
         if criados := await container.semear_agenda():
             logging.getLogger(__name__).info("Agenda mock: %d slot(s) novo(s)", criados)
+
+    async def preparar_rastreio() -> None:
+        await container.preparar_rastreio()
 
     async def recuperar_turnos() -> None:
         if total := await container.recuperar_turnos.executar():
@@ -587,6 +632,7 @@ def criar_aplicacao(settings: Settings | None = None) -> FastAPI:
         ao_iniciar=[
             *([aquecer_embedding] if settings.embedding_carregar_no_inicio else []),
             semear_agenda,
+            preparar_rastreio,
             recuperar_turnos,
         ],
         ao_encerrar=[container.encerrar],

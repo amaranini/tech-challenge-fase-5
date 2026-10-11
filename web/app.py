@@ -90,6 +90,8 @@ def mostrar_envio(mensagem: dict[str, Any]) -> None:
         st.warning("Não enviada: fora da janela de 24h e sem template aprovado para ela.")
     if entrega := mensagem.get("entrega"):
         notas.append(ENTREGA.get(entrega, entrega))
+    if url := mensagem.get("trace_url"):
+        notas.append(f"[🔎 trace]({url})")
     if notas:
         st.caption(" · ".join(notas))
 

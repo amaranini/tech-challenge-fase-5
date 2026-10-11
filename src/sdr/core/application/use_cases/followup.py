@@ -24,6 +24,12 @@ from sdr.core.application.ports.followup import (
     PedidoMensagemAtiva,
     RedatorMensagemAtivaPort,
 )
+from sdr.core.application.ports.observabilidade import (
+    ContextoRastro,
+    RastreioNulo,
+    RastreioPort,
+    Rastro,
+)
 from sdr.core.application.ports.relogio import RelogioPort
 from sdr.core.application.ports.repositorios import (
     ConversaRepository,
@@ -87,6 +93,12 @@ def _evento(
     lead_id: UUID, tipo_evento: TipoEvento, momento: datetime, /, **payload: object
 ) -> EventoLead:
     return EventoLead(lead_id, tipo_evento, momento, payload)
+
+
+def _com_rastro(metadados: dict[str, object], rastro: Rastro) -> dict[str, object]:
+    if rastro.trace_id:
+        metadados["trace"] = {"id": rastro.trace_id, "url": rastro.url}
+    return metadados
 
 
 class OptOutError(RuntimeError):
@@ -284,7 +296,9 @@ class ExecutarFollowUps:
         persona: Persona,
         config: ConfigFollowUp,
         consulta_para_ficha: ConsultaParaFicha | None = None,
+        rastreio: RastreioPort | None = None,
     ) -> None:
+        self._rastreio: RastreioPort = rastreio or RastreioNulo()
         self._followups = followups
         self._programar = programar
         self._leads = leads
@@ -323,7 +337,6 @@ class ExecutarFollowUps:
         if followup.tipo is TipoFollowUp.SLA_HANDOFF:
             await self._checar_sla(followup, lead)
             return
-
         historico = (
             await self._conversas.ultimas_mensagens(conversa.id, LIMITE_HISTORICO)
             if conversa
@@ -358,16 +371,26 @@ class ExecutarFollowUps:
             await self._followups.concluir(followup.id, StatusFollowUp.CANCELADO, motivo.value)
             return
         assert conversa is not None
-        if followup.tipo is TipoFollowUp.LEMBRETE_AGENDAMENTO:
-            await self._lembrar(
-                followup,
-                lead,
-                conversa,
-                historico,
-                agendamento=agendamento,
+        contexto = ContextoRastro(
+            "followup",
+            lead.id,
+            lead.canal.value,
+            lead.atendimento_atual.estado.value,
+            lead.qualificacao.intencao_atual,
+            entrada={"tipo": followup.tipo.value, "etapa": followup.etapa},
+            metadados={"prompt_persona": self._persona.versao_prompt},
+        )
+        with self._rastreio.rastrear(contexto) as rastro:  # só quando a mensagem vai sair
+            if followup.tipo is TipoFollowUp.LEMBRETE_AGENDAMENTO:
+                await self._lembrar(
+                    followup, lead, conversa, historico, agendamento=agendamento, rastro=rastro
+                )
+            else:
+                await self._retomar(followup, lead, conversa, historico, rastro)
+            ultimas = await self._conversas.ultimas_mensagens(
+                conversa.id, 1, incluir_pendentes=True
             )
-        else:
-            await self._retomar(followup, lead, conversa, historico)
+            rastro.saida = ultimas[-1].texto if ultimas else None
 
     # ------------------------------------------------------------------ retomada
     async def _retomar(
@@ -376,6 +399,7 @@ class ExecutarFollowUps:
         lead: Lead,
         conversa: Conversa,
         historico: Sequence[Mensagem],
+        rastro: Rastro,
     ) -> None:
         situacao = followup.situacao or situacao_do_lead(lead.qualificacao)
         cadencia = self._config.cadencias.get(situacao)
@@ -396,7 +420,13 @@ class ExecutarFollowUps:
             "prompt_versao": self._persona.versao_prompt,
         }
         mensagem, template = await self._montar(
-            lead, conversa, pedido, etapa.template, metadados, itens=itens, historico=historico
+            lead,
+            conversa,
+            pedido,
+            etapa.template,
+            _com_rastro(metadados, rastro),
+            itens=itens,
+            historico=historico,
         )
         agora = self._relogio.agora()
         entrega = await self._enviar(lead, conversa, mensagem)
@@ -471,6 +501,7 @@ class ExecutarFollowUps:
         historico: Sequence[Mensagem],
         *,
         agendamento: Agendamento | None,
+        rastro: Rastro,
     ) -> None:
         modelo = self._config.lembrete
         if modelo is None or agendamento is None or str(agendamento.id) != followup.referencia:
@@ -482,7 +513,10 @@ class ExecutarFollowUps:
             conversa,
             PedidoMensagemAtiva(lead, historico, modelo.objetivo, agendamento=agendamento),
             modelo.template,
-            {"followup": {"tipo": followup.tipo.value, "agendamento_id": followup.referencia}},
+            _com_rastro(
+                {"followup": {"tipo": followup.tipo.value, "agendamento_id": followup.referencia}},
+                rastro,
+            ),
             agendamento=agendamento,
         )
         agora = self._relogio.agora()

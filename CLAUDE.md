@@ -1,6 +1,6 @@
 # CLAUDE.md — Agente SDR Conversacional (vertical ativa: imobiliário)
 
-## Fase atual: Dia 4 — Etapa B (aceite da A no celular aguarda o número BR na Meta)
+## Fase atual: Dia 4 — Etapa C (aceite da A no celular aguarda o número BR na Meta)
 
 Ao fim de CADA etapa: parar, listar como verificar o critério de aceite e esperar o ok da PO.
 Commits só com ok da PO, um por etapa, na branch `dia-4` (nunca direto na `main`); ao fim
@@ -132,6 +132,8 @@ src/sdr/
                              CanalWhatsAppTwilio (httpx; whatsapp_formato.py: *negrito*,
                              divisão no limite, variáveis nomeadas → numeradas)
       logs.py                FiltroPII nos handlers (inclusive access log do uvicorn)
+      outbound/observabilidade/  RastreioLangfuse (único que importa o SDK; mask de PII) e
+                             LLMObservado (cada chamada ao LLM = geração no rastro)
       outbound/embeddings/   fastembed (ONNX) local multilíngue (ADR 002)
       outbound/llm/          LLMOpenAI (Chat Completions + tool calling); provedor via
                              LLM_PROVIDER, modelo via LLM_MODELO (ADR 004)
@@ -272,6 +274,11 @@ docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
     core valida TODA variável (fallback = padrão); LLM só nas variáveis gancho.
   - `docs/whatsapp-templates.md` é gerado (`python -m sdr.cli templates-doc`); teste confere.
   - Telefone nunca em log nem em evento (FiltroPII; `LeadCriado` sem remetente).
+- **Observabilidade (ADR 013)**
+  - `RastreioPort` no core (no-op por padrão); Langfuse só em adapters (contrato 5).
+  - Um rastro por turno, follow-up enviado e resumo redigido; etapa por nó do grafo;
+    geração por chamada ao LLM (bootstrap embrulha o LLM de cada nó). `trace` vai na
+    mensagem (id + url). session = lead_id, user = hash; PII mascarada antes de sair.
 - **Qualificação (ADR 005)**
   - Regras universais (troca de intenção, merge, faltantes, eventos) no agregado
     `Qualificacao` do domínio; nós do grafo só orquestram. Scoring/critério são da vertical.
@@ -321,6 +328,8 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
   `<túnel>/webhooks/whatsapp/meta` assinando "messages". Twilio (trial só envia template):
   `PUBLIC_BASE_URL`, `TWILIO_*`. `WHATSAPP_TEMPLATES` (JSON nome lógico → content_sid|nome,
   variaveis), `TEMPLATE_VARIAVEL_MAX_CARACTERES`. Passo a passo no README.
+- Langfuse: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` (vazio = no-op);
+  link "🔎 trace" em cada resposta no chat/Fila.
 - `make busca q="apê 2 quartos zona sul até 800 mil perto do metrô"` — testa POST /imoveis/busca.
 - Debounce: `DEBOUNCE_SEGUNDOS` (5) e `DEBOUNCE_MAX_SEGUNDOS` (20).
 - Follow-up: `FOLLOWUP_UNIDADE=dias|minutos` (demo), `FOLLOWUP_RESPEITAR_HORARIO`,

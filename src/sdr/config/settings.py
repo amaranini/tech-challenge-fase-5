@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Any
 
-from pydantic import SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -88,6 +88,14 @@ class Settings(BaseSettings):
     #   "variaveis": ["primeiro_nome", "compromisso", "com_quem", "quando", "onde"]}}
     whatsapp_templates: dict[str, dict[str, Any]] = {}
     template_variavel_max_caracteres: int = 200  # validador de variáveis de template
+
+    # Observabilidade (Langfuse). Sem as chaves, nada é enviado (no-op).
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: SecretStr | None = None
+    langfuse_host: str = Field(  # EU; US: https://us.cloud.langfuse.com
+        default="https://cloud.langfuse.com",
+        validation_alias=AliasChoices("LANGFUSE_BASE_URL", "LANGFUSE_HOST"),
+    )
 
     # CRM mock (Postgres + log JSON Lines). Produção: HubSpot ou outro CRM.
     crm_mock_log: str | None = "var/crm_mock.jsonl"

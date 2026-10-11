@@ -23,6 +23,12 @@ from uuid import UUID
 from sdr.core.application.ports.agente import AgenteConversacionalPort, EntradaAgente
 from sdr.core.application.ports.catalogo import CatalogoPort
 from sdr.core.application.ports.eventos import PublicadorEventosPort
+from sdr.core.application.ports.observabilidade import (
+    ContextoRastro,
+    RastreioNulo,
+    RastreioPort,
+    Rastro,
+)
 from sdr.core.application.ports.repositorios import (
     ConversaRepository,
     LeadEventoRepository,
@@ -75,7 +81,9 @@ class ProcessarTurno:
         publicador: PublicadorEventosPort | None = None,
         atendimento: AplicarAcaoAtendimento | None = None,
         followups: ProgramarFollowUps | None = None,
+        rastreio: RastreioPort | None = None,
     ) -> None:
+        self._rastreio: RastreioPort = rastreio or RastreioNulo()
         self._followups = followups
         self._publicador = publicador
         self._atendimento = atendimento
@@ -104,7 +112,26 @@ class ProcessarTurno:
         conversa = await self._conversas.obter_aberta(lead_id) if lead else None
         if lead is None or conversa is None:
             return None
+        contexto = ContextoRastro(
+            "turno",
+            lead.id,
+            lead.canal.value,
+            lead.atendimento_atual.estado.value,
+            lead.qualificacao.intencao_atual,
+            metadados={"prompt_persona": self._persona.versao_prompt},
+        )
+        with self._rastreio.rastrear(contexto) as rastro:
+            resultado = await self._turno(lead, conversa, rastro)
+            if resultado is not None:
+                rastro.saida = resultado.resposta.texto
+                rastro.metadados_finais = {
+                    "intencao_final": resultado.lead.qualificacao.intencao_atual or "indefinida",
+                    "reprocessamentos": str(resultado.reprocessamentos),
+                }
+            return resultado
 
+    async def _turno(self, lead: Lead, conversa: Conversa, rastro: Rastro) -> ResultadoTurno | None:
+        lead_id = lead.id
         for tentativa in range(self._max_reprocessamentos + 1):
             lote = await self._conversas.pendentes(conversa.id)
             if not lote:
@@ -112,6 +139,7 @@ class ProcessarTurno:
             ids_lote = {m.id for m in lote}
             historico = await self._conversas.ultimas_mensagens(conversa.id, self._janela_historico)
             entrada = EntradaAgente(lead=lead, historico=historico, texto=_texto_do_lote(lote))
+            rastro.entrada = entrada.texto  # as mensagens do lote, agregadas
             itens: tuple[ItemCatalogo, ...] = ()
             invalidos: list[str] = []
             fallback = False
@@ -151,6 +179,7 @@ class ProcessarTurno:
                 invalidos=invalidos,
                 fallback=fallback,
                 reprocessamentos=tentativa,
+                rastro=rastro,
             )
         return None  # inalcançável: a última tentativa sempre conclui
 
@@ -165,12 +194,15 @@ class ProcessarTurno:
         invalidos: list[str],
         fallback: bool,
         reprocessamentos: int,
+        rastro: Rastro | None = None,
     ) -> ResultadoTurno | None:
         if not await self._estado_ainda_vale(lead, resposta):
             await self._conversas.marcar_status([m.id for m in lote], StatusMensagem.PROCESSADA)
             return None
         metadados = self._metadados(resposta, itens, invalidos, fallback)
         metadados["responde_a"] = [str(m.id) for m in lote]
+        if rastro is not None and rastro.trace_id:
+            metadados["trace"] = {"id": rastro.trace_id, "url": rastro.url}
         # O lead acabou de falar: sempre dentro da janela (texto livre); a regra é do core.
         enviada = await self._entrega.preparar(
             lead, conversa, Papel.ASSISTENTE, resposta.texto, metadados

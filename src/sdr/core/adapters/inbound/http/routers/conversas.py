@@ -54,13 +54,19 @@ class MensagemResposta(BaseModel):
         default=None, description="Status informado pelo provedor (enviada/entregue/lida/falhou)"
     )
     anexos: list[dict[str, Any]] = Field(default_factory=list, description="Do lead")
+    trace_id: str | None = Field(default=None, description="Rastro no Langfuse (observabilidade)")
+    trace_url: str | None = None
 
     @classmethod
     def de_dominio(cls, m: Mensagem) -> "MensagemResposta":
         citados = m.metadados.get("itens_citados")
         envio = m.metadados.get("envio")
         midias = m.metadados.get("midias")
+        trace = m.metadados.get("trace")
+        trace = trace if isinstance(trace, dict) else {}
         return cls(
+            trace_id=trace.get("id"),
+            trace_url=trace.get("url"),
             envio=dict(envio) if isinstance(envio, dict) else None,
             entrega=m.entrega,
             anexos=[{"tipo": a.get("tipo")} for a in midias] if isinstance(midias, list) else [],

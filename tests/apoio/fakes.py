@@ -3,8 +3,9 @@
 import hashlib
 import math
 import re
-from collections.abc import AsyncIterator, Mapping, Sequence
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from uuid import UUID, uuid4
@@ -29,6 +30,7 @@ from sdr.core.application.ports.llm import (
     RespostaEstruturada,
     RespostaLLM,
 )
+from sdr.core.application.ports.observabilidade import ContextoRastro, Observacao, Rastro
 from sdr.core.application.ports.relogio import RelogioPort
 from sdr.core.application.ports.repositorios import AtualizacaoEntrega, ResumoLead
 from sdr.core.application.use_cases.entregar_mensagem import ConfigEntrega, EntregarMensagem
@@ -760,3 +762,62 @@ def template_teste(nome: str) -> TemplateLogico:
             VariavelTemplate("gancho", "frase", padrao="Lembrei de você.", gancho=True),
         ),
     )
+
+
+# ---------------------------------------------------------------- observabilidade
+
+
+class RastreioFake:
+    """Grava rastros, etapas e gerações com o pai de cada uma (pilha por contexto)."""
+
+    def __init__(self) -> None:
+        self.rastros: list[tuple[ContextoRastro, Rastro]] = []
+        self.observacoes: list[tuple[str, str, str | None, Observacao]] = []  # tipo, nome, pai
+        self._pilha: ContextVar[tuple[str, ...]] = ContextVar("pilha", default=())
+
+    @contextmanager
+    def _dentro(self, nome: str) -> Iterator[None]:
+        token = self._pilha.set((*self._pilha.get(), nome))
+        try:
+            yield
+        finally:
+            self._pilha.reset(token)
+
+    def _pai(self) -> str | None:
+        pilha = self._pilha.get()
+        return pilha[-1] if pilha else None
+
+    @contextmanager
+    def rastrear(self, contexto: ContextoRastro) -> Iterator[Rastro]:
+        rastro = Rastro(trace_id=f"trace-{len(self.rastros) + 1}", url="https://lf/t")
+        self.rastros.append((contexto, rastro))
+        with self._dentro(contexto.nome):
+            yield rastro
+
+    @contextmanager
+    def etapa(
+        self, nome: str, *, tipo: str = "span", entrada: object = None
+    ) -> Iterator[Observacao]:
+        observacao = Observacao()
+        self.observacoes.append((tipo, nome, self._pai(), observacao))
+        with self._dentro(nome):
+            yield observacao
+
+    @contextmanager
+    def geracao(
+        self,
+        nome: str,
+        *,
+        modelo: str,
+        entrada: object,
+        parametros: Mapping[str, object] | None = None,
+    ) -> Iterator[Observacao]:
+        observacao = Observacao(modelo=modelo)
+        self.observacoes.append(("generation", nome, self._pai(), observacao))
+        yield observacao
+
+    def encerrar(self) -> None:
+        return None
+
+    def nomes(self, tipo: str) -> list[str]:
+        return [nome for t, nome, _, _ in self.observacoes if t == tipo]

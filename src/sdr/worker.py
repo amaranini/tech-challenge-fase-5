@@ -26,6 +26,7 @@ async def rodar(parar: asyncio.Event) -> None:
     if container.executar_followups is None:
         logger.warning("A vertical ativa não define cadência de follow-up: nada a fazer")
         return
+    await container.preparar_rastreio()
     logger.info(
         "Worker de follow-up no ar (unidade=%s, intervalo=%ss)",
         settings.followup_unidade,
