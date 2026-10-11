@@ -103,10 +103,10 @@ FUSO_PADRAO = ZoneInfo("America/Sao_Paulo")
 PASTA_PROMPTS = Path(__file__).resolve().parent / "prompts"
 # Versões dos prompts do core (vão para o rastro de cada turno).
 VERSOES_PROMPTS = (
-    "roteador_v2,extracao_v2,agenda_interpretacao_v2,agendamento_v1,atendimento_v1,"
+    "roteador_v3,extracao_v2,agenda_interpretacao_v2,agendamento_v1,atendimento_v1,"
     "atendimento_classificacao_v1,limites_v1,opt_out_v1"
 )
-PROMPT_ROTEADOR = (PASTA_PROMPTS / "roteador_v2.md").read_text(encoding="utf-8")
+PROMPT_ROTEADOR = (PASTA_PROMPTS / "roteador_v3.md").read_text(encoding="utf-8")
 PROMPT_CLASSIFICACAO_ATENDIMENTO = (PASTA_PROMPTS / "atendimento_classificacao_v1.md").read_text(
     encoding="utf-8"
 )
@@ -504,6 +504,10 @@ class AgenteQualificador:
                 "quer_agendar": {"type": "boolean"},
                 "fora_do_alcance": {"type": "boolean"},
                 "opt_out": {"type": "boolean"},
+                "pedido": {
+                    "type": "string",
+                    "enum": ["informacao", "conversar_com_pessoa", "outra"],
+                },
             },
             "required": [
                 "intencao",
@@ -512,6 +516,7 @@ class AgenteQualificador:
                 "quer_agendar",
                 "fora_do_alcance",
                 "opt_out",
+                "pedido",
             ],
             "additionalProperties": False,
         }
@@ -537,6 +542,15 @@ class AgenteQualificador:
         except (TypeError, ValueError):
             confianca = 0.0
 
+        sinal_humano = ler_sinal_humano(resposta.dados.get("atendimento_humano", SEM_HANDOFF))
+        # Perguntar o que a equipe disse ("quanto o Fulano falou?") é pedir INFORMAÇÃO, não
+        # uma pessoa: só a instrução no prompt não bastou (LLM real); o sinal estruturado
+        # sobre o que a fala pede desempata.
+        if (
+            sinal_humano is MotivoHandoff.PEDIDO_EXPLICITO
+            and resposta.dados.get("pedido") == "informacao"
+        ):
+            sinal_humano = None
         destino = self._intencoes.get(classificada)
         q, eventos = estado["qualificacao"].aplicar_intencao(
             classificada,
@@ -550,7 +564,7 @@ class AgenteQualificador:
             "intencao_atual": q.intencao_atual,
             "ficha": dict(q.ficha),
             "eventos": eventos,
-            "sinal_humano": ler_sinal_humano(resposta.dados.get("atendimento_humano", SEM_HANDOFF)),
+            "sinal_humano": sinal_humano,
             "quer_agendar": resposta.dados.get("quer_agendar") is True,
             "fora_do_alcance": resposta.dados.get("fora_do_alcance") is True,
             "opt_out": resposta.dados.get("opt_out") is True,
@@ -561,6 +575,7 @@ class AgenteQualificador:
                 "quer_agendar": resposta.dados.get("quer_agendar"),
                 "fora_do_alcance": resposta.dados.get("fora_do_alcance"),
                 "opt_out": resposta.dados.get("opt_out"),
+                "pedido": resposta.dados.get("pedido"),
                 "modelo": resposta.modelo,
             },
             "tokens_entrada": resposta.tokens_entrada,

@@ -121,6 +121,28 @@ async def test_pedido_de_humano_vira_pergunta_de_confirmacao() -> None:
     assert g.extracao.chamadas_estruturadas == []  # não extrai ficha nesse turno
 
 
+async def test_perguntar_o_que_a_equipe_disse_nao_abre_handoff() -> None:
+    """O LLM às vezes marca pedido_explicito ao ver o nome do corretor na pergunta; o sinal
+    estruturado "pedido = informacao" desempata (visto com LLM real)."""
+    g = Grafo(
+        roteador=[
+            {
+                "intencao": "indefinida",
+                "confianca": 0.9,
+                "atendimento_humano": "pedido_explicito",
+                "pedido": "informacao",
+            }
+        ]
+    )
+
+    resposta = await g.responder(
+        lead_em(E.ATENDIMENTO_IA), "quanto o Rafael falou que é o condomínio?"
+    )
+
+    assert resposta.acao_atendimento is None
+    assert resposta.metadados["roteamento"]["pedido"] == "informacao"  # type: ignore[index]
+
+
 async def test_fora_do_horario_a_confirmacao_ja_informa_horario_e_retorno() -> None:
     g = Grafo(
         roteador=[{"intencao": "indefinida", "confianca": 0.9, "atendimento_humano": "frustracao"}],
