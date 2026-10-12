@@ -115,6 +115,20 @@ def avaliar_injecao(texto: str, *, classificada_pelo_llm: bool) -> SinalInjecao 
     return SinalInjecao(origens, padroes) if origens else None
 
 
+# Negação logo antes do trecho: "não consigo dar desconto" é o comportamento CERTO (a regex
+# casava e a resposta era regenerada à toa — visto na avaliação do Dia 5).
+_NEGACAO_ANTES = re.compile(r"\b(nao|nem|nunca|jamais|sem)\b[^.!?:;,]{0,15}$")
+
+
 def promessas_indevidas(texto: str, extras: Iterable[tuple[str, str]] = ()) -> tuple[str, ...]:
-    """Promessas comerciais fora da base na RESPOSTA do agente (desconto, garantia...)."""
-    return _casar((*PADROES_PROMESSA, *extras), texto)
+    """Promessas comerciais fora da base na RESPOSTA do agente (desconto, garantia...),
+    ignorando as negadas ("não consigo desconto", "não garanto que...")."""
+    alvo = normalizar(texto)
+    return tuple(
+        nome
+        for nome, regex in (*PADROES_PROMESSA, *extras)
+        if any(
+            not _NEGACAO_ANTES.search(alvo[: m.start()])
+            for m in re.finditer(regex, alvo, re.MULTILINE)
+        )
+    )

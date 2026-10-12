@@ -71,3 +71,16 @@ def test_promessas_do_segmento_sao_checadas_na_saida() -> None:
     assert promessas_indevidas("Seu financiamento sai aprovado", extras)
     assert promessas_indevidas("o dono aceita pet", extras) == ()  # atributo da base
     assert "corretor" in persona.mensagem_fallback  # resposta segura: próximo passo real
+
+
+@pytest.mark.parametrize("bairro", ["centro", "Centro", "zona sul", "Zona Oeste", "região norte"])
+def test_zona_dita_como_bairro_vira_zona(bairro: str) -> None:
+    """O LLM mandou bairros=["centro"] e a busca voltava vazia (avaliação do Dia 5)."""
+    filtros = Filtros(bairros=[bairro, "Liberdade"])
+    assert filtros.bairros == ["Liberdade"]
+    assert len(filtros.zonas) == 1
+    assert filtros.zonas[0].value in bairro.casefold().replace("região", "").split()[-1]
+
+
+def test_zona_ja_presente_nao_duplica() -> None:
+    assert Filtros(zonas=[Zona.CENTRO], bairros=["centro"]).zonas == [Zona.CENTRO]

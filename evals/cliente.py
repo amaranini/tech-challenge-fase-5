@@ -122,6 +122,11 @@ class ApiViva:
         corpo: dict[str, Any] = r.json()
         return corpo
 
+    def anonimizar(self, lead_id: str) -> bool:
+        """LGPD: anonimiza o lead e cancela agendamento/follow-ups (libera a agenda mock)."""
+        r = self._http.post(f"/lgpd/leads/{lead_id}/anonimizacao")
+        return r.is_success
+
     # ------------------------------------------------------------------ equipe / demo
     def acao_da_equipe(self, lead_id: str, acao: dict[str, Any]) -> str | None:
         """Passo da tela Fila (assumir, responder, devolver) ou da demo (simular

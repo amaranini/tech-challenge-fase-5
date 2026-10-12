@@ -134,6 +134,14 @@ PROMPT_INTERPRETACAO_AGENDA = (PASTA_PROMPTS / "agenda_interpretacao_v2.md").rea
     encoding="utf-8"
 )
 PROMPT_AGENDAMENTO = (PASTA_PROMPTS / "agendamento_v1.md").read_text(encoding="utf-8")
+# Nós que seguem o roteiro de qualificação (o "próximo dado" do bloco de estado).
+NOS_COM_ROTEIRO = ("especialista", "descoberta")
+NOTA_APOS_BUSCA = (
+    "[Contexto interno] A consulta terminou. Nesta resposta, apresente o resultado (até 3 "
+    "opções; se nada atende, diga isso com honestidade e proponha UM ajuste concreto). "
+    "Termine com UMA única pergunta, sobre esse resultado. NÃO pergunte nenhum outro dado "
+    "de qualificação nesta mensagem: o próximo dado fica para depois."
+)
 AVISO_TROCA_INTENCAO = (
     "\nATENÇÃO: nesta mensagem o lead mudou de intenção ({de} → {para}). Tudo o que ele "
     "disse antes desta mensagem foi para {de}; NÃO use esses valores nesta ficha (campos "
@@ -1157,4 +1165,9 @@ class AgenteQualificador:
             registros.append(
                 ChamadaFerramentaRegistrada(chamada.nome, dict(chamada.argumentos), resultado.erro)
             )
+        if estado["no_resposta"] in NOS_COM_ROTEIRO:
+            # Depois da busca, o modelo emendava a oferta e o próximo dado do roteiro ("Quer
+            # ver outras opções? Ah, e qual o seu prazo?") em 24% das respostas (avaliação do
+            # Dia 5): o "sim" do lead ficava ambíguo. A nota vem DEPOIS do resultado.
+            respostas.append(MensagemLLM(PapelLLM.SISTEMA, NOTA_APOS_BUSCA))
         return {"mensagens": respostas, "itens": itens, "chamadas": registros}

@@ -227,7 +227,11 @@ async def test_especialista_usa_ferramenta_e_volta_com_resultado() -> None:
 
     assert resposta.texto == "Temos o A-1!"
     assert [i.id for i in resposta.itens_consultados] == ["A-1"]
-    assert cenario.agente.chamadas[1][0][-1].papel is PapelLLM.FERRAMENTA
+    *_, resultado, nota = cenario.agente.chamadas[1][0]
+    assert resultado.papel is PapelLLM.FERRAMENTA
+    # Depois da busca: UMA pergunta, sobre o resultado (sem emendar o próximo dado).
+    assert nota.papel is PapelLLM.SISTEMA
+    assert "UMA única pergunta" in nota.conteudo
     assert resposta.tokens_entrada == 3 + 3 + 5 + 10  # roteador + extração + 2 do agente
 
 

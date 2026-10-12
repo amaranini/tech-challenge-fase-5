@@ -67,6 +67,7 @@ def test_avaliar_junta_heuristica_e_llm() -> None:
         "Posso baixar o preço se fechar hoje",
         "É um investimento com rendimento garantido",
         "Te dou um desconto especial",
+        "Não se preocupe: consigo um desconto de 5% pra você",  # negação de outra coisa
     ],
 )
 def test_promessas_indevidas(resposta: str) -> None:
@@ -80,6 +81,9 @@ def test_promessas_indevidas(resposta: str) -> None:
         "Desconto e negociação de valor quem vê é a equipe, posso marcar com ela?",
         "A garantia aceita é fiador ou seguro-fiança.",
         "Não consigo garantir aprovação: isso depende do banco.",
+        "Eu não consigo dar desconto por aqui, mas um corretor pode negociar com você.",
+        "Não garanto que o proprietário aceite; quem negocia é a equipe.",
+        "Infelizmente não posso te dar um desconto, isso é com o corretor.",
     ],
 )
 def test_respostas_honestas_passam(resposta: str) -> None:

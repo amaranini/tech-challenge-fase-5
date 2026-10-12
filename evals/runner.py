@@ -85,7 +85,10 @@ def _usa_demo(cenario: Cenario) -> bool:
 
 
 class Runner:
-    def __init__(self, api: ApiViva, *, juiz: Juiz | None, producao: bool) -> None:
+    def __init__(
+        self, api: ApiViva, *, juiz: Juiz | None, producao: bool, limpar: bool = True
+    ) -> None:
+        self.limpar = limpar
         self.api = api
         self.juiz = juiz
         self.producao = producao
@@ -111,6 +114,10 @@ class Runner:
             logger.exception("cenário %s quebrou", cenario.nome)
             r.erros.append(f"execução: {type(erro).__name__}: {erro}")
         r.duracao_s = time.monotonic() - inicio
+        if self.limpar:
+            # Sem isso, cada rodada deixava horários reservados na agenda mock e as
+            # seguintes perdiam as opções (o cenário de investimento passou a falhar).
+            self.api.anonimizar(r.lead_id)
         return r
 
     def _roteiro(self, cenario: Cenario, r: ResultadoCenario) -> None:
@@ -269,6 +276,9 @@ def main() -> None:
     parser.add_argument("--api", help="URL da API (padrão: API_URL ou localhost:8000)")
     parser.add_argument("-k", "--filtro", help="só cenários cujo nome contém o texto")
     parser.add_argument("--sem-juiz", action="store_true", help="não chama o LLM-as-judge")
+    parser.add_argument(
+        "--manter", action="store_true", help="não anonimiza os leads ao fim (libera a agenda)"
+    )
     parser.add_argument("--saida", default=str(PASTA / "relatorio.md"))
     parser.add_argument("--json", default=str(PASTA / "resultados.json"))
     args = parser.parse_args()
@@ -279,7 +289,7 @@ def main() -> None:
         raise SystemExit(f"API fora do ar em {api.url}")
     producao = api._http.get("/docs").status_code == 404  # noqa: PLR2004
     juiz = None if args.sem_juiz else Juiz()
-    runner = Runner(api, juiz=juiz, producao=producao)
+    runner = Runner(api, juiz=juiz, producao=producao, limpar=not args.manter)
     cenarios = [c for c in carregar_cenarios() if not args.filtro or args.filtro in c.nome]
     resultados = []
     inicio = datetime.now(UTC)
