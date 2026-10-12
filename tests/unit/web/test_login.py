@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from streamlit.testing.v1 import AppTest
+
 from web.autenticacao import senha_confere
 
 APP = Path(__file__).resolve().parents[3] / "web" / "app.py"

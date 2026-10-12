@@ -51,6 +51,9 @@ src = ["src", "tests", "web"]
 select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "ASYNC", "N", "PL", "PT"]
 ignore = ["PLR0913", "RUF001", "RUF002", "RUF003"]  # RUF00x: acentos em pt-BR são intencionais
 
+[tool.ruff.lint.isort]
+known-first-party = ["sdr", "web", "tests", "evals"]
+
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["PLR2004"]
 "migrations/**" = ["N999"]

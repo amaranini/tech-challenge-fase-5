@@ -38,6 +38,17 @@ from sdr.core.domain.conversa import Canal, Mensagem, Papel, StatusEntrega, Stat
 
 router = APIRouter(tags=["conversas"])
 
+# Metadados do turno úteis para a equipe e para a avaliação (evals/): nunca no chat público.
+CHAVES_DIAGNOSTICO = (
+    "agente",  # nó que respondeu, roteamento, agenda, atendimento
+    "tokens",
+    "modelo",
+    "prompt_versao",
+    "fallback",
+    "codigos_invalidos",
+    "aviso_midia",
+)
+
 LeadId = Annotated[str, Field(min_length=1, max_length=100, pattern=r"^[\w.@+-]+$")]
 
 
@@ -66,11 +77,21 @@ class MensagemResposta(BaseModel):
     anexos: list[dict[str, Any]] = Field(default_factory=list, description="Do lead")
     trace_id: str | None = Field(default=None, description="Rastro no Langfuse (observabilidade)")
     trace_url: str | None = None
+    diagnostico: dict[str, Any] | None = Field(
+        default=None,
+        description="Só para a equipe: nó que respondeu, roteamento, agenda, tokens, modelo",
+    )
 
     def publica(self) -> "MensagemResposta":
         """Sem o que é interno da operação (o lead não precisa ver)."""
         return self.model_copy(
-            update={"trace_id": None, "trace_url": None, "envio": None, "entrega": None}
+            update={
+                "trace_id": None,
+                "trace_url": None,
+                "envio": None,
+                "entrega": None,
+                "diagnostico": None,
+            }
         )
 
     @classmethod
@@ -80,7 +101,11 @@ class MensagemResposta(BaseModel):
         midias = m.metadados.get("midias")
         trace = m.metadados.get("trace")
         trace = trace if isinstance(trace, dict) else {}
+        diagnostico = {
+            chave: m.metadados[chave] for chave in CHAVES_DIAGNOSTICO if chave in m.metadados
+        }
         return cls(
+            diagnostico=diagnostico or None,
             trace_id=trace.get("id"),
             trace_url=trace.get("url"),
             envio=dict(envio) if isinstance(envio, dict) else None,

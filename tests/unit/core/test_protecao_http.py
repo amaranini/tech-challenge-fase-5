@@ -121,7 +121,11 @@ async def test_historico_de_outro_canal_so_com_chave_e_publico_sem_metadados() -
                 conversa.id,
                 Papel.ASSISTENTE,
                 "Oi!",
-                metadados={"trace": {"id": "t1", "url": "https://langfuse/t1"}},
+                metadados={
+                    "trace": {"id": "t1", "url": "https://langfuse/t1"},
+                    "agente": {"no_resposta": "especialista"},
+                    "tokens": {"entrada": 10, "saida": 5},
+                },
             )
         )
     async with cliente:
@@ -135,6 +139,11 @@ async def test_historico_de_outro_canal_so_com_chave_e_publico_sem_metadados() -
     assert whatsapp_admin.status_code == 200
     assert web.json()["mensagens"][0]["trace_url"] is None
     assert web_admin.json()["mensagens"][0]["trace_url"] == "https://langfuse/t1"
+    assert web.json()["mensagens"][0]["diagnostico"] is None
+    assert web_admin.json()["mensagens"][0]["diagnostico"] == {
+        "agente": {"no_resposta": "especialista"},
+        "tokens": {"entrada": 10, "saida": 5},
+    }
 
 
 async def test_rate_limit_por_remetente_no_chat() -> None:

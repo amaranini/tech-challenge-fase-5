@@ -106,7 +106,7 @@ async def test_get_lead_expoe_qualificacao_completa_e_eventos_em_ordem() -> None
 
     assert resposta.status_code == 200
     corpo = resposta.json()
-    assert {k: v for k, v in corpo.items() if k not in ("criado_em", "eventos")} == {
+    assert {k: v for k, v in corpo.items() if k not in ("criado_em", "eventos", "id")} == {
         "lead_id": "ana",
         "canal": "web",
         "nome": None,

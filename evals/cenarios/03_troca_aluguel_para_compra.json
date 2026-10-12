@@ -2,9 +2,24 @@
   "nome": "troca_aluguel_para_compra",
   "descricao": "Lead começa querendo alugar e muda para compra no meio da conversa: IntencaoAlterada, a ficha de aluguel é preservada e a de compra herda regiao e quartos. O roteiro não tem correções: CampoQualificacaoCorrigido indica valor da intenção anterior vazando para a nova ficha (ex.: aluguel mensal lido como preço de compra).",
   "falas": [
-    "Oi! Quero alugar um apartamento na zona oeste",
-    "2 quartos, até 4 mil por mês com condomínio",
-    "Pensando melhor, prefiro comprar em vez de alugar. Quero comprar um apartamento.",
+    {
+      "texto": "Oi! Quero alugar um apartamento na zona oeste",
+      "esperado": {
+        "intencao": "aluguel"
+      }
+    },
+    {
+      "texto": "2 quartos, até 4 mil por mês com condomínio",
+      "esperado": {
+        "intencao": "aluguel"
+      }
+    },
+    {
+      "texto": "Pensando melhor, prefiro comprar em vez de alugar. Quero comprar um apartamento.",
+      "esperado": {
+        "intencao": "compra"
+      }
+    },
     "Até uns 900 mil"
   ],
   "esperado": {

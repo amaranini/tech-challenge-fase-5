@@ -1,0 +1,38 @@
+{
+  "nome": "tudo_numa_mensagem",
+  "descricao": "O lead entrega a ficha inteira numa mensagem só: a extração pega todos os campos de uma vez (sem inventar outros), o lead fica qualificado e a Lia conduz para a visita sem perguntar o que já foi dito.",
+  "falas": [
+    {
+      "texto": "Olá! Quero comprar um apartamento de 3 quartos na zona oeste, até 1,2 milhão, com 2 vagas. Vou financiar com FGTS e preciso me mudar em até 3 meses.",
+      "esperado": {
+        "intencao": "compra"
+      }
+    }
+  ],
+  "esperado": {
+    "intencao": "compra",
+    "ficha_exata": true,
+    "ficha": {
+      "regiao": {
+        "contem": "oeste"
+      },
+      "quartos": 3,
+      "preco_max": 1200000,
+      "tipo_imovel": "apartamento",
+      "vagas": 2,
+      "forma_pagamento": {
+        "contem_todos": [
+          "financiamento",
+          "fgts"
+        ]
+      },
+      "urgencia": "ate_3_meses"
+    },
+    "proxima_acao": "agendar_visita",
+    "eventos": [
+      {
+        "tipo": "LeadQualificado"
+      }
+    ]
+  }
+}

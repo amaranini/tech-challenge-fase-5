@@ -1,4 +1,4 @@
-.PHONY: seed-demo limpar-demo install lint format typecheck imports test check up down logs migrate seed busca e2e llm
+.PHONY: eval eval-analise seed-demo limpar-demo install lint format typecheck imports test check up down logs migrate seed busca e2e llm
 
 install:
 	uv sync
@@ -54,3 +54,13 @@ e2e:
 
 llm:
 	uv run pytest -m llm -v -s
+
+# Avaliação (Dia 5C): roda os roteiros de evals/cenarios contra a API no ar e gera
+# evals/relatorio.md. Custa tokens. Ex.: make eval args="--api https://... -k injecao"
+eval:
+	uv run python -m evals.runner $(args)
+
+# Só reescreve a seção "Análise" do relatório a partir de evals/analise.md
+eval-analise:
+	uv run python -m evals.relatorio
+

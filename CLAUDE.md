@@ -1,6 +1,6 @@
 # CLAUDE.md — Agente SDR Conversacional (vertical ativa: imobiliário)
 
-## Fase atual: Dia 5 — Etapa B (Etapa A commitada)
+## Fase atual: Dia 5 — Etapa C (A e B commitadas; deploy no ar na Railway)
 
 Ao fim de CADA etapa: parar, listar como verificar o critério de aceite e esperar o ok da PO.
 Commits só com ok da PO, um por etapa, na branch `dia-5` (nunca direto na `main`); ao fim
@@ -208,14 +208,15 @@ worker                     `python -m sdr.worker` (src/sdr/worker.py): só o la�
                            ExecutarFollowUps; serviço `worker` no compose (mesma imagem)
 migrations/                Alembic — histórico ÚNICO para core + verticais
 tests/apoio/               fakes dos ports e fábricas (core e por vertical); api_viva.py
-                           (postar/aguardar_resposta/obter_lead contra a API no ar);
-                           cenarios.py (carrega evals/cenarios e confere o estado final)
+                           (camada pytest sobre evals/cliente.py: pula se a API estiver fora)
 tests/unit/{core,verticals/imobiliario}/          sem banco, sem LLM
 tests/integration/{core,verticals/imobiliario}/   @pytest.mark.integration; banco sdr_test
 tests/e2e/                 @pytest.mark.e2e — LLM real contra a API no ar (opt-in: make e2e)
 tests/llm/                 @pytest.mark.llm — cenários de qualificação com LLM real (make llm)
-evals/cenarios/            roteiros JSON (falas do lead + estado final esperado) — reusados
-                           no eval do Dia 5
+evals/                     avaliação (Dia 5C, evals/README.md): cenarios/*.json (15 roteiros),
+                           cenarios.py (motor; também do `make llm`), cliente.py (API no ar),
+                           metricas.py, ancoragem.py, juiz.py + rubrica_juiz_v1.md, runner.py
+                           (`make eval`) → relatorio.md + resultados.json; analise.md à mão
 docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
 ```
 
@@ -387,6 +388,12 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
   `ROUTER_CONFIANCA_MIN` (0.6) para trocar de intenção.
 - `make e2e` — aceite da Etapa C (Dia 1) com LLM real contra a API no ar (custa tokens; precisa
   de OPENAI_API_KEY no .env). Fora do `make check` (`addopts = -m 'not e2e and not llm'`).
+- `make eval` (`args="--api URL -k nome --sem-juiz"`) — runner da avaliação: roda os roteiros
+  contra a API no ar, mede intenção, extração (precisão/cobertura), comportamentos
+  obrigatórios, ancoragem, juiz 1–5 (`EVAL_MODELO_JUIZ`, padrão gpt-4.1), latência e custo;
+  gera `evals/relatorio.md` e manda scores ao Langfuse. `make eval-analise` reaplica
+  `evals/analise.md`. Na nuvem, roteiros com /demo são pulados. Respostas trazem
+  `diagnostico` (nó, roteamento, agenda, tokens) só com X-API-Key.
 - `make llm` (= `pytest -m llm -v -s`) — cenários com LLM real lidos de
   `evals/cenarios/*.json` (compra → visita agendada após o "sim", investimento → reunião
   online com a especialista, troca aluguel → compra, remarcar e cancelar); asserts no estado
