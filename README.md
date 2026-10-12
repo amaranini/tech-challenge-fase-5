@@ -232,8 +232,6 @@ docs/                   arquitetura, IA, segurança, deploy, roadmap, ADRs
   Calendar e HubSpot).
 - **WhatsApp:** número da conta de demonstração; templates **não aprovados**, então fora da
   janela de 24 h a Lia não envia mensagem ativa (registra `EnvioTemplateIndisponivel`).
-- **Deploy contínuo:** depende do app GitHub da Railway com acesso ao repositório; até
-  lá, os deploys são disparados pela CLI ([docs/deploy.md](docs/deploy.md)).
 - **Segurança de POC:** chave de admin única e login compartilhado (sem SSO), chat web sem
   sessão assinada, detecção de injeção por heurística + LLM (pode falhar com ataques
   novos). Riscos residuais em [docs/seguranca.md](docs/seguranca.md).

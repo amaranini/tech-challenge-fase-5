@@ -1,6 +1,6 @@
 # CLAUDE.md — Agente SDR Conversacional (vertical ativa: imobiliário)
 
-## Fase atual: Dia 5 — Etapa D (A, B e C commitadas; deploy no ar na Railway)
+## Fase atual: Dia 5 concluído (tag `v1.0-entrega`; PR #4 na main; deploy contínuo da main na Railway)
 
 Ao fim de CADA etapa: parar, listar como verificar o critério de aceite e esperar o ok da PO.
 Commits só com ok da PO, um por etapa, na branch `dia-5` (nunca direto na `main`); ao fim
