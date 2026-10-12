@@ -3,6 +3,7 @@ import json
 import pytest
 
 from sdr.core.application.ferramentas.buscar_catalogo import FerramentaBuscarCatalogo
+from sdr.core.domain.seguranca import promessas_indevidas
 from sdr.verticals.imobiliario.catalogo.adapters.catalogo_imobiliario import CatalogoImobiliario
 from sdr.verticals.imobiliario.catalogo.adapters.esquema_filtros import Filtros
 from sdr.verticals.imobiliario.catalogo.adapters.ferramenta_buscar_imoveis import (
@@ -61,3 +62,12 @@ async def test_tool_buscar_imoveis_de_ponta_a_ponta_com_fakes() -> None:
     assert json.loads(ok.conteudo)["itens"][0]["codigo"] == "IMV-001"
     assert alucinado.erro is not None
     assert alucinado.itens == ()
+
+
+def test_promessas_do_segmento_sao_checadas_na_saida() -> None:
+    persona = carregar_persona()
+    extras = persona.padroes_promessa
+    assert promessas_indevidas("O proprietário aceita 700 mil!", extras)
+    assert promessas_indevidas("Seu financiamento sai aprovado", extras)
+    assert promessas_indevidas("o dono aceita pet", extras) == ()  # atributo da base
+    assert "corretor" in persona.mensagem_fallback  # resposta segura: próximo passo real

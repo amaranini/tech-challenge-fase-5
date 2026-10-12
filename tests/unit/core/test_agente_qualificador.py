@@ -208,6 +208,9 @@ async def test_roteador_com_saida_invalida_e_tratado_como_indefinida() -> None:
         "fora_do_alcance": None,
         "opt_out": None,
         "pedido": None,
+        "tentativa_injecao": None,
+        "fora_do_dominio": None,
+        "injecao_padroes": [],
         "modelo": "fake-1",
     }
 

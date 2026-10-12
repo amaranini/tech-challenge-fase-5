@@ -15,6 +15,7 @@ from sdr.core.domain.qualificacao import Qualificacao
 class Persona:
     """Quem o agente é na vertical: prompt de sistema versionado + convenções.
 
+    `mensagem_fallback`: a resposta segura quando a saída é reprovada duas vezes.
     `padrao_codigo_item`: regex dos códigos de item do catálogo que o agente cita no texto
     (ex.: "ABC-123"). Permite ao core conferir que nada fora da base foi citado.
     """
@@ -23,6 +24,9 @@ class Persona:
     versao_prompt: str
     prompt_sistema: str
     padrao_codigo_item: str | None = None
+    # Promessas indevidas próprias do segmento (nome, regex sobre texto sem acento),
+    # além das genéricas do core (desconto, garantia de resultado...). ADR 015.
+    padroes_promessa: tuple[tuple[str, str], ...] = ()
     mensagem_fallback: str = "Deixa eu conferir isso direitinho e já te respondo, tá bom?"
     # Resposta a áudio/imagem/documento: por enquanto o assistente só entende texto.
     aviso_midia: str = (

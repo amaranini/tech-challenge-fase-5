@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sdr.config.settings import Settings, obter_settings
 from sdr.core.adapters.inbound.http.app import criar_app
 from sdr.core.adapters.inbound.http.dependencias import Dependencias
+from sdr.core.adapters.inbound.http.protecao import ProtecaoHttp
 from sdr.core.adapters.inbound.http.routers.whatsapp_meta import WebhookMeta
 from sdr.core.adapters.inbound.http.routers.whatsapp_twilio import WebhookTwilio
 from sdr.core.adapters.logs import instalar_mascara_pii
@@ -45,6 +46,7 @@ from sdr.core.adapters.outbound.canais.whatsapp_twilio import (
 )
 from sdr.core.adapters.outbound.embeddings.fastembed_adapter import EmbeddingFastembed
 from sdr.core.adapters.outbound.eventos.publicador_asyncio import PublicadorEventosAsyncio
+from sdr.core.adapters.outbound.limite_taxa.memoria import LimitadorTaxaMemoria
 from sdr.core.adapters.outbound.llm.openai_adapter import LLMOpenAI
 from sdr.core.adapters.outbound.observabilidade.langfuse_rastreio import RastreioLangfuse
 from sdr.core.adapters.outbound.observabilidade.llm_observado import LLMObservado
@@ -53,6 +55,7 @@ from sdr.core.adapters.outbound.persistence.consultas_painel_sql import Consulta
 from sdr.core.adapters.outbound.persistence.crm_postgres import CRMPostgresMock
 from sdr.core.adapters.outbound.persistence.database import criar_engine, criar_fabrica_sessao
 from sdr.core.adapters.outbound.persistence.followups_sql import FollowUpRepositorySql
+from sdr.core.adapters.outbound.persistence.lgpd_sql import DadosTitularSql
 from sdr.core.adapters.outbound.persistence.repositorios_conversa_sql import (
     ConversaRepositorySql,
     EntregaRepositorySql,
@@ -99,6 +102,7 @@ from sdr.core.application.use_cases.followup import (
     ProgramarFollowUps,
 )
 from sdr.core.application.use_cases.gerar_resumo_handoff import GerarResumoHandoff
+from sdr.core.application.use_cases.lgpd import AnonimizarLead, ExportarDadosLead
 from sdr.core.application.use_cases.obter_lead import ObterLead
 from sdr.core.application.use_cases.processar_turno import ProcessarTurno
 from sdr.core.application.use_cases.receber_mensagem import ReceberMensagem
@@ -113,6 +117,9 @@ from sdr.verticals.imobiliario.pack import PackImobiliario
 VERTICAIS: dict[str, Callable[[], VerticalPack]] = {
     "imobiliario": PackImobiliario,
 }
+
+
+AMBIENTE_PRODUCAO = "producao"
 
 
 def _llm_openai(settings: Settings, modelo: str) -> LLMPort:
@@ -352,6 +359,8 @@ class Container:
     whatsapp: CanalWhatsApp | None
     agenda: AgendaPostgres
     relogio: RelogioSistema
+    exportar_dados_lead: ExportarDadosLead
+    anonimizar_lead: AnonimizarLead
     settings: Settings
 
     async def semear_agenda(self) -> int:
@@ -543,7 +552,12 @@ def montar_container(settings: Settings | None = None) -> Container:
     )
     agendador.definir_executor(processar_turno.executar)
     receber_mensagem = ReceberMensagem(
-        leads, conversas, eventos, agendador, followups=programar_followups
+        leads,
+        conversas,
+        eventos,
+        agendador,
+        followups=programar_followups,
+        limite_texto=settings.mensagem_max_caracteres,
     )
     webhook_twilio, webhook_meta = _webhooks_whatsapp(
         settings, whatsapp, receber_mensagem, atualizar_entrega
@@ -591,7 +605,32 @@ def montar_container(settings: Settings | None = None) -> Container:
         whatsapp=whatsapp,
         agenda=agenda,
         relogio=relogio,
+        exportar_dados_lead=ExportarDadosLead(leads, DadosTitularSql(sessoes)),
+        anonimizar_lead=AnonimizarLead(
+            leads, DadosTitularSql(sessoes), eventos, relogio, agenda=agenda, followups=followups
+        ),
         settings=settings,
+    )
+
+
+def _protecao(settings: Settings) -> ProtecaoHttp:
+    """Chaves de admin e rate limit (ADR 015). Em produção, sem chave a API não sobe."""
+    chaves = tuple(c.strip() for c in _segredo(settings.admin_api_keys).split(",") if c.strip())
+    producao = settings.ambiente == AMBIENTE_PRODUCAO
+    if producao and not chaves:
+        raise RuntimeError("AMBIENTE=producao exige ADMIN_API_KEYS (rotas administrativas)")
+    if not chaves:
+        logging.getLogger(__name__).warning(
+            "ADMIN_API_KEYS vazio: rotas administrativas ABERTAS (só para ambiente local)"
+        )
+    return ProtecaoHttp(
+        chaves_admin=chaves,
+        producao=producao,
+        confiar_proxy=settings.confiar_proxy,
+        limitador=LimitadorTaxaMemoria(),
+        limite_remetente_por_minuto=settings.limite_remetente_por_minuto,
+        limite_ip_por_minuto=settings.limite_ip_por_minuto,
+        limite_ip_webhook_por_minuto=settings.limite_ip_webhook_por_minuto,
     )
 
 
@@ -599,6 +638,7 @@ def criar_aplicacao(settings: Settings | None = None) -> FastAPI:
     settings = settings or obter_settings()
     logging.basicConfig(level=settings.log_level)
     instalar_mascara_pii()
+    protecao = _protecao(settings)
     container = montar_container(settings)
 
     async def aquecer_embedding() -> None:
@@ -632,6 +672,9 @@ def criar_aplicacao(settings: Settings | None = None) -> FastAPI:
             consultar_painel=lambda: container.consultar_painel,
             whatsapp_twilio=lambda: container.webhook_twilio,
             whatsapp_meta=lambda: container.webhook_meta,
+            protecao=protecao,
+            exportar_dados_lead=lambda: container.exportar_dados_lead,
+            anonimizar_lead=lambda: container.anonimizar_lead,
         ),
         routers=container.vertical.routers,
         ao_iniciar=[

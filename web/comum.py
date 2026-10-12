@@ -14,6 +14,10 @@ import httpx
 import streamlit as st
 
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
+# Chave de admin da API: as telas da equipe usam rotas protegidas. API_KEY ou, se vazio,
+# a primeira de ADMIN_API_KEYS (o mesmo .env da API no docker compose).
+_CHAVE = os.environ.get("API_KEY") or os.environ.get("ADMIN_API_KEYS", "").split(",")[0].strip()
+HEADERS = {"X-API-Key": _CHAVE} if _CHAVE else {}
 TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 POLLING_SEGUNDOS = 1.5
 EVENTOS_NO_PAINEL = 20
@@ -300,7 +304,7 @@ def mostrar_resumo(lead_id: str, *, recolhido: bool) -> None:
     """Resumo para quem vai atender (tela Fila). `recolhido`: num expander, para ler antes
     de assumir; senão, num quadro aberto (dentro de outro expander não cabe expander)."""
     try:
-        resposta = httpx.get(f"{API_URL}/leads/{lead_id}/resumo", timeout=TIMEOUT)
+        resposta = httpx.get(f"{API_URL}/leads/{lead_id}/resumo", headers=HEADERS, timeout=TIMEOUT)
     except httpx.HTTPError:
         return
     if resposta.status_code == httpx.codes.NOT_FOUND:
@@ -326,7 +330,7 @@ def mostrar_resumo(lead_id: str, *, recolhido: bool) -> None:
 
 
 def api_get(caminho: str, **params: Any) -> Any:
-    resposta = httpx.get(f"{API_URL}{caminho}", params=params, timeout=TIMEOUT)
+    resposta = httpx.get(f"{API_URL}{caminho}", params=params, headers=HEADERS, timeout=TIMEOUT)
     resposta.raise_for_status()
     return resposta.json()
 
@@ -335,6 +339,7 @@ def api_enviar(lead_id: str, texto: str) -> dict[str, Any]:
     resposta = httpx.post(
         f"{API_URL}/conversas/mensagens",
         json={"lead_id": lead_id, "texto": texto},
+        headers=HEADERS,
         timeout=TIMEOUT,
     )
     if resposta.is_error:
@@ -369,7 +374,9 @@ def mostrar_ficha(ficha: dict[str, Any], faltantes: list[str]) -> None:
 def api_post(caminho: str, corpo: dict[str, Any] | None = None) -> str | None:
     """POST na API; devolve a mensagem de erro (ou None se deu certo)."""
     try:
-        resposta = httpx.post(f"{API_URL}{caminho}", json=corpo or {}, timeout=TIMEOUT)
+        resposta = httpx.post(
+            f"{API_URL}{caminho}", json=corpo or {}, headers=HEADERS, timeout=TIMEOUT
+        )
     except httpx.HTTPError as erro:
         return str(erro)
     if resposta.is_error:

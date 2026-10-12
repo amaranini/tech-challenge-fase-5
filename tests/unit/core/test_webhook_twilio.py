@@ -5,8 +5,10 @@ from datetime import UTC, datetime
 import httpx
 
 from sdr.core.adapters.inbound.http.app import criar_app
+from sdr.core.adapters.inbound.http.protecao import ProtecaoHttp
 from sdr.core.adapters.inbound.http.routers.whatsapp_twilio import WebhookTwilio
 from sdr.core.adapters.inbound.http.twilio_assinatura import calcular_assinatura
+from sdr.core.adapters.outbound.limite_taxa.memoria import LimitadorTaxaMemoria
 from sdr.core.application.use_cases.entregar_mensagem import AtualizarStatusEntrega
 from sdr.core.application.use_cases.receber_mensagem import ReceberMensagem
 from sdr.core.domain.conversa import Canal, Mensagem, Papel, StatusEntrega, StatusMensagem
@@ -27,7 +29,7 @@ ROTA = "/webhooks/whatsapp/twilio"
 
 
 class Cenario:
-    def __init__(self, *, ligado: bool = True) -> None:
+    def __init__(self, *, ligado: bool = True, protecao: ProtecaoHttp | None = None) -> None:
         self.leads = LeadRepositoryFake()
         self.conversas = ConversaRepositoryFake()
         self.eventos = LeadEventoRepositoryFake()
@@ -43,7 +45,12 @@ class Cenario:
                 self.entregas, self.eventos, RelogioFake(datetime(2026, 10, 8, tzinfo=UTC))
             ),
         )
-        app = criar_app(criar_dependencias(whatsapp_twilio=lambda: webhook if ligado else None))
+        app = criar_app(
+            criar_dependencias(
+                whatsapp_twilio=lambda: webhook if ligado else None,
+                protecao=protecao or ProtecaoHttp(),
+            )
+        )
         # A app enxerga "http://interno": a assinatura usa a URL pública (túnel).
         self.http = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://interno"
@@ -151,3 +158,16 @@ async def test_callback_de_status_atualiza_a_entrega_sem_regredir() -> None:
     [evento] = c.eventos.eventos[1:]  # [0] = LeadCriado
     assert evento.tipo is TipoEvento.MENSAGEM_NAO_ENTREGUE
     assert evento.payload["motivo"] == "63016"
+
+
+async def test_acima_do_limite_por_remetente_responde_200_e_descarta() -> None:
+    """Rate limit (ADR 015): 200 para o Twilio não reenviar; a mensagem não entra."""
+    c = Cenario(
+        protecao=ProtecaoHttp(
+            limitador=LimitadorTaxaMemoria(lambda: 0.0), limite_remetente_por_minuto=2
+        )
+    )
+    respostas = [await c.post(mensagem_twilio(sid=f"SM{i}")) for i in range(3)]
+
+    assert [r.status_code for r in respostas] == [200, 200, 200]
+    assert [m.id_externo for m in c.conversas.mensagens] == ["SM0", "SM1"]

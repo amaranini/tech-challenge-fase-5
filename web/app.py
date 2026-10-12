@@ -5,9 +5,18 @@ Consome SOMENTE a API HTTP — nunca o banco. Cada página é um script em web/p
 as peças comuns estão em web/comum.py.
 """
 
+import sys
+from pathlib import Path
+
 import streamlit as st
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # raiz: pacote "web"
+
+from web.autenticacao import botao_sair, exigir_login
+
 st.set_page_config(page_title="Lia — SDR Imobiliário", page_icon="🏠", layout="wide")
+exigir_login()  # todas as páginas (inclusive o chat de demonstração) exigem login
+botao_sair()
 
 paginas = {
     "Dashboard": [

@@ -11,7 +11,16 @@ from typing import Any
 import httpx
 import pytest
 
+from sdr.config.settings import obter_settings
+
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
+# Rotas da equipe exigem X-API-Key (ADR 015): a mesma chave do .env da API. O dashboard,
+# quando testado aqui (AppTest), lê API_KEY do ambiente.
+_segredo = obter_settings().admin_api_keys
+CHAVE = os.environ.get("API_KEY") or (_segredo.get_secret_value().split(",")[0] if _segredo else "")
+if CHAVE:
+    os.environ.setdefault("API_KEY", CHAVE)
+HEADERS = {"X-API-Key": CHAVE} if CHAVE else {}
 
 
 def exigir_api() -> None:
@@ -23,7 +32,7 @@ def exigir_api() -> None:
 
 
 def postar(lead_id: str, *textos: str) -> None:
-    with httpx.Client(base_url=API_URL, timeout=30) as api:
+    with httpx.Client(base_url=API_URL, headers=HEADERS, timeout=30) as api:
         for texto in textos:
             resposta = api.post("/conversas/mensagens", json={"lead_id": lead_id, "texto": texto})
             assert resposta.status_code == 202, resposta.text
@@ -33,7 +42,7 @@ def postar(lead_id: str, *textos: str) -> None:
 def aguardar_resposta(lead_id: str, timeout: float = 120) -> dict[str, Any]:
     """Polling até não haver turno pendente; devolve o histórico."""
     limite = time.monotonic() + timeout
-    with httpx.Client(base_url=API_URL, timeout=30) as api:
+    with httpx.Client(base_url=API_URL, headers=HEADERS, timeout=30) as api:
         while time.monotonic() < limite:
             historico: dict[str, Any] = api.get(f"/conversas/{lead_id}/mensagens").json()
             if not historico["processando"]:
@@ -56,14 +65,14 @@ def enviar(lead_id: str, texto: str) -> dict[str, Any]:
 
 
 def obter_lead(lead_id: str) -> dict[str, Any]:
-    resposta = httpx.get(f"{API_URL}/leads/{lead_id}", timeout=30)
+    resposta = httpx.get(f"{API_URL}/leads/{lead_id}", headers=HEADERS, timeout=30)
     resposta.raise_for_status()
     corpo: dict[str, Any] = resposta.json()
     return corpo
 
 
 def historico(lead_id: str) -> dict[str, Any]:
-    resposta = httpx.get(f"{API_URL}/conversas/{lead_id}/mensagens", timeout=30)
+    resposta = httpx.get(f"{API_URL}/conversas/{lead_id}/mensagens", headers=HEADERS, timeout=30)
     resposta.raise_for_status()
     corpo: dict[str, Any] = resposta.json()
     return corpo
@@ -73,7 +82,7 @@ def aguardar_resumo(lead_id: str, gatilho: str | None, timeout: float = 120) -> 
     """O resumo é gerado FORA do turno: espera a versão do gatilho esperado aparecer."""
     limite = time.monotonic() + timeout
     while time.monotonic() < limite:
-        resposta = httpx.get(f"{API_URL}/leads/{lead_id}/resumo", timeout=30)
+        resposta = httpx.get(f"{API_URL}/leads/{lead_id}/resumo", headers=HEADERS, timeout=30)
         if resposta.status_code == httpx.codes.OK:
             corpo: dict[str, Any] = resposta.json()
             if gatilho is None or corpo["gatilho"] == gatilho:
@@ -84,7 +93,7 @@ def aguardar_resumo(lead_id: str, gatilho: str | None, timeout: float = 120) -> 
 
 def acao_da_equipe(lead_id: str, acao: dict[str, Any]) -> None:
     """Passo da tela Fila: assumir, responder ou devolver o atendimento."""
-    with httpx.Client(base_url=API_URL, timeout=30) as api:
+    with httpx.Client(base_url=API_URL, headers=HEADERS, timeout=30) as api:
         match acao["acao"]:
             case "assumir":
                 r = api.post(

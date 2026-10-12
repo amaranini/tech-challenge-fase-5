@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, Request
 
+from sdr.core.adapters.inbound.http.protecao import ProtecaoHttp
 from sdr.core.application.consultas.painel import ConsultarPainel
 from sdr.core.application.use_cases.atendimento import (
     AssumirAtendimento,
@@ -17,6 +18,7 @@ from sdr.core.application.use_cases.consultar_agenda_e_resumo import (
 )
 from sdr.core.application.use_cases.consultar_conversas import ListarLeads, ObterHistorico
 from sdr.core.application.use_cases.followup import ProgramarFollowUps
+from sdr.core.application.use_cases.lgpd import AnonimizarLead, ExportarDadosLead
 from sdr.core.application.use_cases.obter_lead import ObterLead
 from sdr.core.application.use_cases.receber_mensagem import ReceberMensagem
 from sdr.core.application.use_cases.verificar_saude import VerificarSaude
@@ -52,6 +54,9 @@ class Dependencias:
     consultar_painel: Callable[[], ConsultarPainel] = field(default=_sem_painel)
     whatsapp_twilio: "Callable[[], WebhookTwilio | None]" = field(default=lambda: None)
     whatsapp_meta: "Callable[[], WebhookMeta | None]" = field(default=lambda: None)
+    protecao: ProtecaoHttp = field(default_factory=ProtecaoHttp)
+    exportar_dados_lead: Callable[[], ExportarDadosLead | None] = field(default=lambda: None)
+    anonimizar_lead: Callable[[], AnonimizarLead | None] = field(default=lambda: None)
 
 
 def obter_consultar_painel(request: Request) -> ConsultarPainel:

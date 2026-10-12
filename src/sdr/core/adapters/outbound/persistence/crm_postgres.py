@@ -20,6 +20,7 @@ from sdr.core.adapters.outbound.persistence.resumos_sql import secoes_para_json
 from sdr.core.application.ports.crm import RegistroCRM
 from sdr.core.domain.agenda import Agendamento
 from sdr.core.domain.conversa import Lead, agora
+from sdr.core.domain.pii import mascarar_pii
 from sdr.core.domain.resumo import Resumo
 
 logger = logging.getLogger(__name__)
@@ -107,7 +108,9 @@ class CRMPostgresMock:
         return registro
 
     async def _registrar_log(self, linha: dict[str, Any]) -> None:
-        texto = json.dumps(linha, ensure_ascii=False, default=str)
+        # O arquivo é uma exportação (simula o payload ao CRM): sai com a PII mascarada; a
+        # tabela crm_registros guarda o dado íntegro (é o "CRM").
+        texto = mascarar_pii(json.dumps(linha, ensure_ascii=False, default=str))
         logger.info("CRM mock: %s %s", linha["operacao"], linha["crm_id"])
         if self._log is None:
             return

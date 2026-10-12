@@ -97,6 +97,16 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("LANGFUSE_BASE_URL", "LANGFUSE_HOST"),
     )
 
+    # Segurança (ADR 015)
+    mensagem_max_caracteres: int = 2000  # entrada do lead; web acima disso = 422, WhatsApp trunca
+    # Chaves aceitas no header X-API-Key das rotas administrativas/de atendimento (vírgula).
+    # Vazio: em local, rotas abertas (com aviso no log); em produção a API não sobe.
+    admin_api_keys: SecretStr | None = None
+    confiar_proxy: bool = False  # True atrás de proxy (Railway/Render): IP do X-Forwarded-For
+    limite_remetente_por_minuto: int = 20  # mensagens por remetente (chat web e webhook)
+    limite_ip_por_minuto: int = 60  # requisições por IP no chat público
+    limite_ip_webhook_por_minuto: int = 600  # no webhook o IP é do provedor: só contra flood
+
     # CRM mock (Postgres + log JSON Lines). Produção: HubSpot ou outro CRM.
     crm_mock_log: str | None = "var/crm_mock.jsonl"
 

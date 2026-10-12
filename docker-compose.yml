@@ -57,8 +57,14 @@ services:
     build:
       context: .
       dockerfile: docker/web.Dockerfile
+    # Só o que o front precisa (sem env_file: as chaves do LLM/WhatsApp ficam na API).
     environment:
       API_URL: http://api:8000
+      AMBIENTE: ${AMBIENTE:-local}
+      ADMIN_API_KEYS: ${ADMIN_API_KEYS:-}
+      DASHBOARD_USUARIO: ${DASHBOARD_USUARIO:-}
+      DASHBOARD_SENHA_HASH: ${DASHBOARD_SENHA_HASH:-}
+      DASHBOARD_SENHA: ${DASHBOARD_SENHA:-}
     ports:
       - "${WEB_PORT:-8501}:8501"
     healthcheck:

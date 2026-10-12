@@ -22,7 +22,7 @@ from sdr.core.application.use_cases.followup import ProgramarFollowUps
 from sdr.core.domain.conversa import Canal, Conversa, Lead, Mensagem, Papel, StatusMensagem
 from sdr.core.domain.eventos import EventoLead, TipoEvento
 
-LIMITE_TEXTO = 4000
+LIMITE_TEXTO = 2000  # padrão; a operação ajusta (MENSAGEM_MAX_CARACTERES) — ADR 015
 
 
 ROTULO_MIDIA = {"audio": "áudio", "imagem": "imagem", "video": "vídeo", "documento": "documento"}
@@ -50,8 +50,11 @@ class ReceberMensagem:
         conversas: ConversaRepository,
         eventos: LeadEventoRepository,
         agendador: AgendadorTurnoPort,
+        *,
         followups: ProgramarFollowUps | None = None,
+        limite_texto: int = LIMITE_TEXTO,
     ) -> None:
+        self._limite_texto = limite_texto
         self._followups = followups
         self._leads = leads
         self._conversas = conversas
@@ -62,11 +65,14 @@ class ReceberMensagem:
         texto = mensagem.texto.strip()
         if not texto and not mensagem.midias:
             raise MensagemInvalidaError("mensagem vazia")
-        if len(texto) > LIMITE_TEXTO:
-            texto = texto[:LIMITE_TEXTO]  # do canal não dá para recusar: guarda o começo
+        truncada = len(texto) > self._limite_texto
+        if truncada:
             if mensagem.canal is Canal.WEB:
-                raise MensagemInvalidaError(f"mensagem acima de {LIMITE_TEXTO} caracteres")
+                raise MensagemInvalidaError(f"mensagem acima de {self._limite_texto} caracteres")
+            texto = texto[: self._limite_texto]  # do canal não dá para recusar: guarda o começo
         metadados: dict[str, object] = {"canal": mensagem.canal.value, **mensagem.metadados}
+        if truncada:
+            metadados["truncada"] = True
         if mensagem.midias:
             rotulos = " ".join(f"[{ROTULO_MIDIA.get(m.tipo, 'anexo')}]" for m in mensagem.midias)
             texto = f"{texto}\n{rotulos}".strip()
