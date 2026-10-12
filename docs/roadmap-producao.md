@@ -80,8 +80,8 @@ aí sim vale extrair configuração.
 
 ## 6. Operação
 
-- Deploy contínuo com o CI como gate (liberar o app GitHub da Railway no repositório;
-  "Wait for CI" exige que todos os check suites concluam).
+- CI como gate do deploy: o push na `main` já publica, mas o "Wait for CI" da Railway está
+  desligado (exige que TODOS os check suites concluam, e o do app Cursor fica pendente).
 - Ambientes separados (staging com dados sintéticos e o eval rodando a cada mudança de
   prompt ou modelo; produção com aprovação).
 - Alertas: SLA da fila estourado, taxa de `EnvioTemplateIndisponivel`, erros de entrega,

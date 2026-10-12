@@ -5,7 +5,7 @@
 import { defineRailway, github, image, project, service, volume } from "railway/iac";
 
 const REGIAO = "us-east4-eqdc4a";
-const BRANCH = "dia-5"; // depois do merge: "main"
+const BRANCH = "main"; // cada push na main publica (gatilho do app GitHub da Railway)
 
 export default defineRailway(() => {
   // checkSuites ("Wait for CI") desligado: a Railway espera TODOS os check suites do

@@ -187,12 +187,12 @@ DATABASE_URL='<DATABASE_PUBLIC_URL>' uv run python scripts/seed_demo.py --remove
 migrations) e `pytest` (unitários + integração contra um Postgres pgvector de serviço;
 sem `@llm` e `@e2e`, que precisam de LLM real). Não usa segredos.
 
-> **Gatilho do push:** o deploy automático depende do **app GitHub da Railway com acesso
-> ao repositório** (railway.com → Account Settings → Integrations/GitHub → Configure →
-> liberar o repositório). Sem ele, os serviços buildam (o repositório é lido), mas nenhum
-> push dispara deploy (`repoTriggers` vazio; criar o gatilho pela API falha com "no one in
-> the project has access to it"). Enquanto isso, publique um commit à mão:
-> `railway deployment redeploy --service api` ou, para um commit específico, a mutation
+> **Gatilho do push (configurado):** cada push na `main` publica os serviços cujos
+> `watchPatterns` mudaram. Isso depende do **app GitHub da Railway com acesso ao
+> repositório** (railway.com → Account Settings → GitHub). Sem ele, os serviços buildam,
+> mas nenhum push dispara deploy (`repoTriggers` vazio; criar o gatilho pela API falha com
+> "no one in the project has access to it"). Deploy manual de um commit, se precisar:
+> `railway deployment redeploy --service api` ou a mutation
 > `serviceInstanceDeployV2(serviceId, environmentId, commitSha)` via `railway api`.
 
 Deploy contínuo: a Railway rebuilda a cada push na branch configurada, só para os
