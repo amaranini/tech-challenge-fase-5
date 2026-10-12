@@ -17,14 +17,15 @@ flowchart LR
     API -->|traces| Langfuse
 ```
 
-| Serviço | Imagem | Config | Domínio público | Healthcheck |
+| Serviço | Imagem | Domínio público | Healthcheck |
 |---|---|---|---|---|
-| `pgvector` | template pgvector da Railway | — | não | da plataforma |
-| `api` | `docker/api.Dockerfile` | `deploy/railway/api.json` | sim (webhook e chat) | `/health` (consulta o banco) |
-| `worker` | `docker/api.Dockerfile` (mesma) | `deploy/railway/worker.json` | não | reinício `ALWAYS` |
-| `web` | `docker/web.Dockerfile` | `deploy/railway/web.json` | sim (dashboard) | `/_stcore/health` |
+| `pgvector` | `pgvector/pgvector:pg18` (template da Railway, volume 5 GB) | não | da plataforma |
+| `api` | `docker/api.Dockerfile` | sim (webhook e chat) | `/health` (consulta o banco) |
+| `worker` | `docker/api.Dockerfile` (mesma) | não | reinício `ALWAYS` |
+| `web` | `docker/web.Dockerfile` | sim (dashboard) | `/_stcore/health` |
 
-O que cada config faz:
+Tudo isso está declarado em **`.railway/railway.ts`** (Infrastructure as Code da Railway;
+o antigo config-as-code `railway.json` foi descontinuado). O que cada serviço faz:
 - **api:** pré-deploy `alembic upgrade head && python -m sdr.cli seed` (migrations e
   seed idempotente do catálogo + agenda mock, num container separado, ANTES do novo
   deploy entrar), start só do uvicorn, healthcheck `/health`. **1 réplica** (veja
@@ -36,41 +37,63 @@ As imagens são multi-stage: o modelo de embeddings é baixado no BUILD (a image
 `/models` e `HF_HUB_OFFLINE=1`, sem download no runtime), sem uv nem cache, usuário não
 root. Tamanhos: api ≈ 770 MB (240 MB são o modelo), web ≈ 570 MB.
 
-## Passo a passo
+## Ambiente publicado
+
+| | URL |
+|---|---|
+| API | https://api-production-e5c4.up.railway.app (`/health`) |
+| Dashboard | https://web-production-a6acc.up.railway.app (login) |
+| Webhook WhatsApp (Meta) | https://api-production-e5c4.up.railway.app/webhooks/whatsapp/meta |
+
+Projeto Railway `sdr-lia` (workspace da PO), ambiente `production`, região US East.
+
+## Passo a passo (do zero)
 
 ### 1. Pré-requisitos
-- Conta na [Railway](https://railway.com) com o GitHub conectado (plano Hobby: o
-  trial/créditos cobrem a demo; o seed precisa de ~0,9 GB de memória no pré-deploy).
-- O repositório no GitHub com a branch a publicar (ex.: `main` depois do merge).
+- Conta na [Railway](https://railway.com) com o GitHub conectado e a CLI
+  (`brew install railway && railway login`).
+- Node/npm só para a ferramenta de infra: `npm install` na raiz instala o SDK
+  `railway` que avalia o `.railway/railway.ts` (a aplicação continua 100% Python/uv).
 - Chave da OpenAI; app da Meta com WhatsApp Cloud API, número brasileiro e token
   permanente de usuário do sistema (README, seção Meta); opcional: Langfuse.
 
-### 2. Banco (Postgres + pgvector)
-1. **New Project → Deploy a template →** procure **pgvector** (template oficial
-   `pgvector/pgvector`, com volume persistente). Renomeie o serviço para `pgvector`.
-2. Nada mais: a migration `0001_extensao_vector` roda `CREATE EXTENSION IF NOT EXISTS
-   vector` no pré-deploy da API.
+### 2. Projeto, banco e serviços
+```bash
+railway init --name sdr-lia                 # cria o projeto e liga este diretório
+railway deploy -t 3jJFCA                    # template pgvector (Postgres + volume)
+for s in api worker web; do
+  railway add --service $s --repo <owner>/tech-challenge-fase-5 --branch <branch>
+done
+railway domain --service api --port 8000    # domínio público da api
+railway domain --service web --port 8501    # domínio público do dashboard
+```
+Ajuste em `.railway/railway.ts` o repositório e a `BRANCH`, defina as variáveis
+(passo 4) e aplique:
+```bash
+npm install
+railway config plan     # o que mudaria (não altera nada)
+railway config apply    # Dockerfile, pré-deploy, start, healthcheck, réplicas
+```
+A migration `0001_extensao_vector` roda `CREATE EXTENSION IF NOT EXISTS vector` no
+pré-deploy da API; o banco não precisa de passo manual.
 
-### 3. Serviços `api`, `worker` e `web`
-Para cada um: **+ New → GitHub Repo →** este repositório, e então em **Settings**:
-1. **Service name:** `api`, `worker` ou `web` (os nomes são usados nas referências).
-2. **Source → Branch:** a branch a publicar.
-3. **Config-as-code → Railway Config File:** `deploy/railway/api.json`,
-   `deploy/railway/worker.json` ou `deploy/railway/web.json`.
-4. **Networking:** em `api` e `web`, **Generate Domain** (porta: a que a Railway detectar
-   em `PORT`; na `api` defina `PORT=8000` nas variáveis para fixar).
+### 3. Pelo painel (alternativa à CLI)
+**New Project → Deploy a template → pgvector**; depois **+ New → GitHub Repo** três
+vezes (`api`, `worker`, `web`) e, em cada serviço, os mesmos valores do
+`.railway/railway.ts` (Dockerfile path, start/pre-deploy command, healthcheck, branch).
 
 ### 4. Variáveis
-Use **Shared Variables** do projeto para o que vale para `api` e `worker`, e referencie
-o banco com `${{pgvector.DATABASE_URL}}` (a app troca `postgresql://` pelo driver
-async sozinha). Lista completa e comentada em [`.env.example`](../.env.example).
+As variáveis NÃO ficam no `.railway/railway.ts` (`variables: { managed: false }`): os
+segredos ficam só na Railway (`railway variable set CHAVE --stdin --service api`).
+Referencie o banco com `${{pgvector.DATABASE_URL_PRIVATE}}` (rede interna; a app troca
+`postgresql://` pelo driver async sozinha). Lista completa e comentada em [`.env.example`](../.env.example).
 
 **api e worker**
 
 | Variável | Valor |
 |---|---|
 | `AMBIENTE` | `producao` (sem `/demo`, sem `/docs`; exige `ADMIN_API_KEYS`) |
-| `DATABASE_URL` | `${{pgvector.DATABASE_URL}}` |
+| `DATABASE_URL` | `${{pgvector.DATABASE_URL_PRIVATE}}` |
 | `OPENAI_API_KEY` | sua chave |
 | `LLM_MODELO` (e `LLM_MODEL_*`, opcional) | como no `.env` local |
 | `ADMIN_API_KEYS` | `openssl rand -hex 32` |
@@ -151,8 +174,8 @@ curl -s -X POST $API/imoveis/busca -H 'content-type: application/json' \
   resposta da Lia chega em ~5–10 s (debounce) e a conversa aparece em Leads/Fila.
 
 ### 8. Dados de demonstração (opcional)
-Na Railway, o serviço `pgvector` expõe `DATABASE_PUBLIC_URL` (proxy TCP). Do seu
-computador:
+Na Railway, o serviço `pgvector` tem proxy TCP público (`DATABASE_URL` do serviço,
+`railway variable list --service pgvector --kv`). Do seu computador:
 ```bash
 DATABASE_URL='<DATABASE_PUBLIC_URL>' uv run python scripts/seed_demo.py           # ~40 leads demo
 DATABASE_URL='<DATABASE_PUBLIC_URL>' uv run python scripts/seed_demo.py --remover # remove
@@ -164,8 +187,12 @@ DATABASE_URL='<DATABASE_PUBLIC_URL>' uv run python scripts/seed_demo.py --remove
 migrations) e `pytest` (unitários + integração contra um Postgres pgvector de serviço;
 sem `@llm` e `@e2e`, que precisam de LLM real). Não usa segredos.
 
-Deploy contínuo: a Railway rebuilda a cada push na branch configurada. Para só publicar
-com CI verde, ative **Settings → Source → Wait for CI** em cada serviço.
+Deploy contínuo: a Railway rebuilda a cada push na branch configurada, só para os
+serviços cujos `watchPatterns` mudaram. O "esperar o CI" da Railway (`checkSuites` no
+`.railway/railway.ts`) está **desligado**: ela espera TODOS os check suites do commit, e o
+do app Cursor instalado na conta do GitHub fica `queued` para sempre — o deploy falhava
+sem log. Para ligar: remova/configure esse app no repositório e use `checkSuites: true`.
+Até lá, o gate é o CI verde no GitHub antes do merge na branch publicada.
 
 ## Limitações da POC (e o que muda em produção)
 - **API com 1 réplica.** O debounce dos turnos (ADR 006) e o rate limit (ADR 015) vivem

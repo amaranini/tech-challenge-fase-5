@@ -18,3 +18,6 @@ build/
 
 # CRM mock (log JSON Lines)
 var/
+
+# Ferramenta de infra da Railway (npm)
+node_modules/

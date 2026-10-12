@@ -200,8 +200,9 @@ web/                       Streamlit multipágina — SOMENTE via API HTTP: app.
 scripts/seed_demo.py       ~40 leads sintéticos (leads.demo) — make seed-demo / limpar-demo
 docker/                    api.Dockerfile (api + worker) e web.Dockerfile, multi-stage: modelo de
                            embeddings no build, venv não editável, usuário não root
-deploy/railway/            config-as-code por serviço (api: pré-deploy migra + seed, healthcheck
-                           /health, 1 réplica; worker; web) — passo a passo em docs/deploy.md
+.railway/railway.ts        IaC da Railway (api: pré-deploy migra + seed, healthcheck /health,
+                           1 réplica; worker; web; pgvector; "esperar CI" desligado — check suite do Cursor) — `npm install` +
+                           `railway config plan|apply`; variáveis fora do código; docs/deploy.md
 .github/workflows/ci.yml   ruff, mypy, lint-imports, alembic check, pytest (sem llm/e2e) a cada push
 worker                     `python -m sdr.worker` (src/sdr/worker.py): só o laço de
                            ExecutarFollowUps; serviço `worker` no compose (mesma imagem)

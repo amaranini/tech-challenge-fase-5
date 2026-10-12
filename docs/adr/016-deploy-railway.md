@@ -14,8 +14,10 @@ WhatsApp (Meta Cloud API) precisa de HTTPS estável (fim do túnel local).
 ## Decisão
 
 1. **Railway** (e não Render): template de Postgres com pgvector e volume, vários
-   serviços do mesmo repositório, `preDeployCommand` e healthcheck no config-as-code
-   (`deploy/railway/*.json`), rede privada entre serviços e worker sem HTTP. No Render, o
+   serviços do mesmo repositório, pré-deploy e healthcheck declarados em
+   Infrastructure as Code (`.railway/railway.ts`, aplicado com `railway config apply`;
+   o config-as-code `railway.json` foi descontinuado pela Railway) e worker sem HTTP.
+   Variáveis ficam fora do código (segredos só na plataforma). No Render, o
    worker em segundo plano não tem plano gratuito e o Postgres gratuito expira.
 2. **Imagens multi-stage**: builder com uv e o download do modelo de embeddings
    (reprodutível, sem rede no runtime — ADR 002); runtime só com o venv (projeto
@@ -29,7 +31,8 @@ WhatsApp (Meta Cloud API) precisa de HTTPS estável (fim do túnel local).
    ADR 015). Escalar exige trocar esses adapters (fila/Redis) — roadmap.
 5. **CI** no GitHub Actions: ruff, mypy, import-linter, `alembic check` e pytest
    (unitários + integração com Postgres pgvector de serviço), sem testes `@llm`/`@e2e`
-   e sem segredos. A Railway pode esperar o CI verde antes de publicar.
+   e sem segredos. O "esperar o CI" da Railway fica desligado (um check suite de outro app
+   do GitHub nunca conclui); o gate é o CI verde antes do merge na branch publicada.
 6. A URL do banco da plataforma (`postgresql://`) é normalizada para o driver async na
    config.
 
