@@ -1,6 +1,6 @@
 # CLAUDE.md — Agente SDR Conversacional (vertical ativa: imobiliário)
 
-## Fase atual: Dia 5 — Etapa A
+## Fase atual: Dia 5 — Etapa B (Etapa A commitada)
 
 Ao fim de CADA etapa: parar, listar como verificar o critério de aceite e esperar o ok da PO.
 Commits só com ok da PO, um por etapa, na branch `dia-5` (nunca direto na `main`); ao fim
@@ -23,8 +23,8 @@ Dia 5 em 4 etapas (especificação completa no pedido da PO; resumo):
 - **B — Deploy + CI:** Railway/Render (api, worker, web, Postgres+pgvector); Dockerfiles
   multi-stage com o modelo de embeddings no build; migrations no pré-deploy; seed
   idempotente; healthchecks; API com 1 réplica (limitação documentada); .env.example
-  comentado; PUBLIC_BASE_URL do deploy + webhook Twilio; GitHub Actions (ruff, mypy,
-  lint-imports, pytest sem @llm); docs/deploy.md. Aceite: URL pública, WhatsApp do sandbox
+  comentado; PUBLIC_BASE_URL do deploy + webhook da Meta (canal em uso; não Twilio);
+  GitHub Actions (ruff, mypy, lint-imports, pytest sem @llm); docs/deploy.md. Aceite: URL pública, WhatsApp (Meta)
   no cloud, dashboard com login, CI verde.
 - **C — Avaliação:** runner em evals/ sobre evals/cenarios/ (~15 cenários); métricas de
   intenção, extração (precisão/cobertura), comportamentos obrigatórios, ancoragem,
@@ -198,6 +198,11 @@ web/                       Streamlit multipágina — SOMENTE via API HTTP: app.
                            (visao_geral, leads + detalhe, fila, agenda, followups, chat);
                            tema em .streamlit/config.toml
 scripts/seed_demo.py       ~40 leads sintéticos (leads.demo) — make seed-demo / limpar-demo
+docker/                    api.Dockerfile (api + worker) e web.Dockerfile, multi-stage: modelo de
+                           embeddings no build, venv não editável, usuário não root
+deploy/railway/            config-as-code por serviço (api: pré-deploy migra + seed, healthcheck
+                           /health, 1 réplica; worker; web) — passo a passo em docs/deploy.md
+.github/workflows/ci.yml   ruff, mypy, lint-imports, alembic check, pytest (sem llm/e2e) a cada push
 worker                     `python -m sdr.worker` (src/sdr/worker.py): só o laço de
                            ExecutarFollowUps; serviço `worker` no compose (mesma imagem)
 migrations/                Alembic — histórico ÚNICO para core + verticais
@@ -344,6 +349,10 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
 
 - uv (Python 3.12), ruff (lint + format), mypy strict, pytest (+ pytest-asyncio), import-linter.
 - `make check` — ruff + format check + mypy + lint-imports + pytest.
+- Deploy: Railway (ADR 016, docs/deploy.md). Na nuvem NÃO definir `EMBEDDING_CACHE_DIR`
+  (a imagem usa /models); `DATABASE_URL` da plataforma é normalizada para psycopg; o seed
+  precisa de ~0,9 GB (embedding em lotes de 16). VM Docker local é pequena: rodar o seed
+  com worker/web parados se der `Killed`.
 - `docker compose up -d --build --wait` — db (pgvector, host:5433), api (:8000), web (:8501),
   worker (follow-up; `docker compose logs -f worker`).
   A API roda `alembic upgrade head` no start.

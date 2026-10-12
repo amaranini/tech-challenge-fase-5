@@ -10,7 +10,11 @@ class EmbeddingFastembed:
 
     O modelo é carregado sob demanda (download na 1ª vez para `cache_dir`) e a
     inferência, que é CPU-bound, roda em thread para não bloquear o event loop.
+    Lotes pequenos: com o padrão do fastembed (256) a carga do catálogo inteiro num lote
+    só estourava a memória de um container de 1,5 GB (visto no Dia 5, preparando o deploy).
     """
+
+    LOTE = 16
 
     def __init__(self, modelo: str, dimensao: int, cache_dir: str | None = None) -> None:
         self._nome_modelo = modelo
@@ -31,7 +35,7 @@ class EmbeddingFastembed:
     def _gerar(self, textos: Sequence[str]) -> list[list[float]]:
         self.carregar()
         assert self._modelo is not None
-        vetores = [v.tolist() for v in self._modelo.embed(list(textos))]
+        vetores = [v.tolist() for v in self._modelo.embed(list(textos), batch_size=self.LOTE)]
         if vetores and len(vetores[0]) != self._dimensao:
             raise ValueError(
                 f"Modelo {self._nome_modelo} gera dimensão {len(vetores[0])}, "

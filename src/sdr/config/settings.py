@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Any
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,6 +11,16 @@ class Settings(BaseSettings):
     ambiente: str = "local"
     log_level: str = "INFO"
     database_url: str = "postgresql+psycopg://sdr:sdr@localhost:5433/sdr"
+
+    @field_validator("database_url")
+    @classmethod
+    def _driver_psycopg(cls, valor: str) -> str:
+        """Plataformas (Railway, Render) entregam `postgres://` ou `postgresql://`: o
+        SQLAlchemy async precisa do driver explícito."""
+        for prefixo in ("postgres://", "postgresql://"):
+            if valor.startswith(prefixo):
+                return "postgresql+psycopg://" + valor[len(prefixo) :]
+        return valor
 
     # Vertical de negócio ativa (registro em sdr.bootstrap.VERTICAIS)
     vertical: str = "imobiliario"
