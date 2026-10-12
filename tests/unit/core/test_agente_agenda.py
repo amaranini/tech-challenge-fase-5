@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from uuid import uuid4
 
-from sdr.core.adapters.outbound.agent.agenda import ler_interpretacao
+from sdr.core.adapters.outbound.agent.agenda import escolha_por_posicao, ler_interpretacao
 from sdr.core.adapters.outbound.agent.agente_qualificador import (
     AgenteQualificador,
     ConfigQualificacao,
@@ -15,12 +15,15 @@ from sdr.core.application.ports.agente import EntradaAgente
 from sdr.core.application.use_cases.conduzir_agendamento import ConduzirAgendamento
 from sdr.core.domain.agenda import (
     AcaoAgenda,
+    Agendamento,
+    InterpretacaoAgenda,
     NegociacaoAgenda,
     Operacao,
     Periodo,
     PreferenciaHorario,
     Proposta,
     Responsavel,
+    StatusAgendamento,
     TipoAgendamento,
 )
 from sdr.core.domain.agente import Persona
@@ -249,3 +252,55 @@ async def test_limites_do_assistente_em_toda_resposta_com_o_proximo_passo_real()
     assert "NÃO consegue: enviar fotos" in limites
     assert "nunca diga que tem" in limites
     assert "próximo passo que existe de verdade: marcar aula experimental" in limites
+
+
+def _com_visita_marcada(c: "Cenario") -> Lead:
+    base = lead({"unidade": "Centro"})  # NÃO qualificado: agendou antes de completar a ficha
+    inicio = AGORA + timedelta(days=1, hours=5)
+    c.agenda.agendamentos[uuid4()] = Agendamento(
+        uuid4(), base.id, SOL, uuid4(), inicio, inicio + timedelta(hours=1), "aula",
+        "presencial", StatusAgendamento.ATIVO, AGORA, ("A-7",),
+    )  # fmt: skip
+    return base
+
+
+async def test_com_algo_marcado_toda_fala_passa_pela_agenda_e_nao_reoferece_itens() -> None:
+    """Agendou antes de completar a ficha: nas falas seguintes o especialista voltava a
+    buscar e oferecer itens, e chegou a dizer "cancelei" sem cancelar (LLM real)."""
+    c = Cenario([interpretacao("nenhuma")])
+    base = _com_visita_marcada(c)
+
+    resposta = await c.grafo.responder(EntradaAgente(base, [], "não, obrigado"))
+
+    assert resposta.metadados["no_resposta"] == "responder_agenda"
+    assert resposta.metadados["agenda"]["decisao"] == "manter"  # type: ignore[index]
+    bloco = c.bloco()
+    assert "Já está agendado: aula experimental" in bloco
+    assert "NÃO apresente itens do catálogo nem ofereça marcar de novo" in bloco
+    assert "despeça-se numa frase, SEM pergunta" in bloco
+
+
+async def test_pedido_de_cancelar_sem_qualificar_pede_confirmacao_e_nao_cancela() -> None:
+    c = Cenario([interpretacao("cancelar")])
+    base = _com_visita_marcada(c)
+
+    resposta = await c.grafo.responder(EntradaAgente(base, [], "poderia cancelar minha visita?"))
+
+    assert resposta.metadados["agenda"]["decisao"] == "pedir_confirmacao"  # type: ignore[index]
+    assert resposta.agenda is not None
+    assert resposta.agenda.proposta is not None
+    assert resposta.agenda.proposta.operacao is Operacao.CANCELAR
+    assert c.agenda.chamadas == []  # nada cancelado antes do "sim"
+    assert "Ainda NÃO está cancelado" in c.bloco()
+
+
+def test_escolha_pela_posicao_descarta_a_preferencia_de_dia_que_o_llm_juntou() -> None:
+    confundida = InterpretacaoAgenda(
+        AcaoAgenda.PREFERENCIA, PreferenciaHorario(dias_semana=(0,)), opcao=2
+    )  # "segunda opção" → segunda-feira
+    for fala in ("Pode ser a segunda opção", "o primeiro horário", "a última opção", "opção 3"):
+        assert escolha_por_posicao(confundida, fala).preferencia == PreferenciaHorario()
+    for fala in ("pode ser na segunda?", "segunda às 10h"):
+        assert escolha_por_posicao(confundida, fala) == confundida  # é o dia mesmo
+    sem_opcao = replace(confundida, opcao=None)
+    assert escolha_por_posicao(sem_opcao, "a segunda opção") == sem_opcao

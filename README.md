@@ -83,35 +83,55 @@ Fora da janela de 24h, só saem templates aprovados ([ADR 012](docs/adr/012-cana
 O provedor é escolhido em `WHATSAPP_PROVEDOR`: `meta` (Cloud API oficial — o número de
 teste é gratuito) ou `twilio` (conta trial só envia por template; precisa de upgrade).
 
-**Túnel** para a API local (os dois provedores precisam de uma URL pública):
+**Túnel** para a API local (os provedores precisam de uma URL pública). Recomendado: ngrok
+com o domínio fixo gratuito da conta — se o túnel cair, a URL continua a mesma e o webhook
+não precisa ser reconfigurado:
 
 ```bash
-brew install cloudflared && cloudflared tunnel --url http://localhost:8000
-# a URL https://….trycloudflare.com aparece num quadro no meio do log; deixe o terminal aberto
+ngrok config add-authtoken <authtoken>              # uma vez (painel do ngrok)
+ngrok http --url=<seu-dominio>.ngrok-free.dev 8000  # Domains → domínio fixo gratuito
 ```
 
-#### Meta (WhatsApp Cloud API) — recomendado para a demo
+(`cloudflared tunnel --url http://localhost:8000` também serve, mas a URL muda a cada vez.)
+
+#### Meta (WhatsApp Cloud API) — recomendado
 
 1. Em [developers.facebook.com](https://developers.facebook.com), *Meus apps → Criar app*,
-   caso de uso **WhatsApp** (ou tipo *Empresa* + produto WhatsApp).
-2. *WhatsApp → Configuração da API* (*API Setup*): anote o **Phone number ID** do número de
-   teste, gere o **token de acesso** (temporário, 24h) e, em *Para*, cadastre e verifique
-   o seu celular como destinatário.
-3. *Configurações do app → Básico*: copie a **Chave secreta do app** (App Secret).
+   caso de uso **WhatsApp**. Em *Configurações do app → Básico*, copie a **Chave secreta
+   do app** (App Secret).
+2. **Número:** o número de teste (+1 555…) é gratuito, mas a Meta **não entrega** para
+   celular brasileiro a partir de número estrangeiro em conta nova (erro 130497). Para
+   falar com celulares do Brasil, adicione um **número brasileiro** à conta do WhatsApp
+   Business (*Configuração da API → Adicionar número*) e anote o **Phone number ID**.
+3. **Token permanente** (o temporário vence em 24h e cai ao sair do Facebook): em
+   [business.facebook.com/settings](https://business.facebook.com/settings) →
+   *Usuários → Usuários do sistema* → crie um (Administrador), atribua o **app** e a
+   **conta do WhatsApp** com controle total e **Gere novo token** (validade "Nunca";
+   permissões `whatsapp_business_messaging`, `whatsapp_business_management` e
+   `business_management`).
 4. **`.env`** (depois `docker compose up -d --build --wait`):
    ```bash
    WHATSAPP_PROVEDOR=meta
-   META_ACCESS_TOKEN=...          # renove quando expirar (24h)
+   META_ACCESS_TOKEN=...            # token do usuário do sistema
    META_PHONE_NUMBER_ID=...
    META_APP_SECRET=...
    META_VERIFY_TOKEN=qualquer-texto-que-voce-inventar
-   FOLLOWUP_UNIDADE=minutos        # demo: cadência em minutos
+   FOLLOWUP_UNIDADE=minutos          # demo: cadência em minutos
    ```
-5. *WhatsApp → Configuração* (*Configuration*) → **Webhook → Editar**: URL de callback
-   `https://<seu-tunel>/webhooks/whatsapp/meta` e o mesmo `META_VERIFY_TOKEN` → *Verificar
-   e salvar* (a API precisa estar no ar). Em *Campos do webhook*, assine **messages**.
-6. Do celular, mande "oi" para o número de teste. No Streamlit, o lead aparece como
-   `📱 whatsapp:+55...` (só leitura no chat; a equipe responde pela tela Fila).
+5. **Webhook** — *WhatsApp → Configuração → Webhook*: URL de callback
+   `https://<seu-dominio>/webhooks/whatsapp/meta`, o mesmo `META_VERIFY_TOKEN`, e assine
+   o campo **messages**. (Também dá para trocar a URL pela API:
+   `POST /{app-id}/subscriptions` com o token do app `app_id|app_secret`.)
+6. **Inscreva o app na conta do WhatsApp Business do número** — sem isso só o botão
+   "Testar" do painel chega, não as mensagens reais:
+   ```bash
+   curl -X POST "https://graph.facebook.com/v22.0/<WABA_ID>/subscribed_apps" \
+     -H "Authorization: Bearer $META_ACCESS_TOKEN"
+   ```
+   O `<WABA_ID>` aparece em *Configurações do negócio → Contas → Contas do WhatsApp*
+   (ou via `GET /<business-id>/owned_whatsapp_business_accounts`).
+7. Do celular, mande "oi" para o número. No Streamlit, o lead aparece como
+   `📱 whatsapp:+55...` (o chat é só leitura; a equipe responde pela tela Fila).
 
 #### Twilio
 
@@ -123,8 +143,8 @@ brew install cloudflared && cloudflared tunnel --url http://localhost:8000
 3. *Sandbox settings* → "When a message comes in" =
    `https://<seu-tunel>/webhooks/whatsapp/twilio` (POST).
 
-O túnel grátis muda de URL a cada execução: atualize o webhook no painel (e, no Twilio,
-o `PUBLIC_BASE_URL`). Assinatura inválida ⇒ 403 no log da API. Templates para aprovação:
+Com o cloudflared (ou ngrok sem domínio fixo), a URL muda a cada execução: atualize o
+webhook no painel (e, no Twilio, o `PUBLIC_BASE_URL`). Assinatura inválida ⇒ 403 no log da API. Templates para aprovação:
 [docs/whatsapp-templates.md](docs/whatsapp-templates.md) (gerado por
 `uv run python -m sdr.cli templates-doc`). Telefones aparecem mascarados nos logs.
 

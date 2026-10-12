@@ -1,13 +1,6 @@
 # CLAUDE.md — Agente SDR Conversacional (vertical ativa: imobiliário)
 
-## Fase atual: Dia 4 — concluído (tag `dia-4`); próximo: Dia 5
-
-**Pendência do Dia 4:** aceite da Etapa A pelo celular (Exemplo 1 até o agendamento,
-mensagens picadas, handoff com resposta do corretor pela Fila, follow-up em minutos) aguarda
-a verificação do número BRASILEIRO na Meta — o número de teste americano não entrega para
-celular brasileiro (erro 130497). Com o número aprovado: trocar `META_PHONE_NUMBER_ID`,
-cadastrar o webhook e repassar o roteiro. Recebimento, assinatura, turno e envio já
-validados com o número de teste.
+## Fase atual: Dia 4 — concluído (tag `dia-4`; aceite no celular feito em 11/10); próximo: Dia 5
 
 Ao fim de CADA etapa: parar, listar como verificar o critério de aceite e esperar o ok da PO.
 Commits só com ok da PO, um por etapa, na branch `dia-4` (nunca direto na `main`); ao fim
