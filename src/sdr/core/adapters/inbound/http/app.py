@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, FastAPI, Request
 from sdr.core.adapters.inbound.http.dependencias import Dependencias
 from sdr.core.adapters.inbound.http.protecao import (
     exigir_admin,
+    exigir_admin_estrito,
     ip_cliente,
     limitar,
     obter_protecao,
@@ -60,7 +61,7 @@ def criar_app(
     app.include_router(agendamentos.router, dependencies=admin)
     app.include_router(atendimentos.router, dependencies=admin)
     app.include_router(painel.router, dependencies=admin)
-    app.include_router(lgpd.router, dependencies=admin)
+    app.include_router(lgpd.router, dependencies=[Depends(exigir_admin_estrito)])
     app.include_router(qualidade.router, dependencies=admin)
     if not producao:
         app.include_router(demo.router, dependencies=admin)

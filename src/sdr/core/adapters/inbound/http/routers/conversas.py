@@ -23,10 +23,10 @@ from sdr.core.adapters.inbound.http.dependencias import (
 )
 from sdr.core.adapters.inbound.http.lead_publico import identificar
 from sdr.core.adapters.inbound.http.protecao import (
-    eh_admin,
     ip_cliente,
     limitar,
     obter_protecao,
+    pode_ler,
 )
 from sdr.core.application.dto.mensagem_recebida import MensagemRecebida
 from sdr.core.application.use_cases.consultar_conversas import ObterHistorico
@@ -167,7 +167,7 @@ async def historico(
     obter: Annotated[ObterHistorico, Depends(obter_obter_historico)],
 ) -> HistoricoResposta:
     canal, remetente = identificar(lead_id)
-    admin = eh_admin(request)
+    admin = pode_ler(request)  # equipe (admin ou leitura) vê outros canais e o diagnóstico
     if not admin:
         if canal is not Canal.WEB:  # ex.: conversa de WhatsApp só para a equipe
             raise HTTPException(401, "credencial ausente ou inválida")

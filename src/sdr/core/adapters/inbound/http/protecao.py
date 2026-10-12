@@ -3,6 +3,8 @@
 - Rotas administrativas e de atendimento (painel, leads, fila, agenda, LGPD, demo) exigem
   `X-API-Key` com uma das ADMIN_API_KEYS. Sem chave configurada: aberto só em ambiente
   local (aviso no start); em produção o bootstrap recusa subir.
+- LEITURA_API_KEYS (ex.: o usuário de avaliação do dashboard): só GET, e nunca a LGPD
+  (a exportação devolve dados pessoais completos).
 - Chat público e webhooks: rate limit por IP e por remetente (LimitadorTaxaPort).
 - Webhooks continuam protegidos pela assinatura do provedor.
 """
@@ -30,6 +32,7 @@ class _SemLimite:
 @dataclass(frozen=True)
 class ProtecaoHttp:
     chaves_admin: Sequence[str] = ()
+    chaves_leitura: Sequence[str] = ()
     producao: bool = False
     confiar_proxy: bool = False
     limitador: LimitadorTaxaPort = field(default_factory=_SemLimite)
@@ -43,10 +46,17 @@ class ProtecaoHttp:
         return not self.chaves_admin and not self.producao
 
     def chave_valida(self, chave: str | None) -> bool:
-        if not chave:
-            return False
-        recebida = chave.encode()
-        return any(hmac.compare_digest(recebida, c.encode()) for c in self.chaves_admin)
+        return _confere(chave, self.chaves_admin)
+
+    def chave_leitura(self, chave: str | None) -> bool:
+        return _confere(chave, self.chaves_leitura)
+
+
+def _confere(chave: str | None, validas: Sequence[str]) -> bool:
+    if not chave:
+        return False
+    recebida = chave.encode()
+    return any(hmac.compare_digest(recebida, c.encode()) for c in validas)
 
 
 def obter_protecao(request: Request) -> ProtecaoHttp:
@@ -54,17 +64,41 @@ def obter_protecao(request: Request) -> ProtecaoHttp:
     return protecao
 
 
+METODOS_DE_LEITURA = frozenset({"GET", "HEAD"})
+
+
 def eh_admin(request: Request) -> bool:
     protecao = obter_protecao(request)
     return protecao.aberta or protecao.chave_valida(request.headers.get(HEADER_CHAVE))
 
 
+def pode_ler(request: Request) -> bool:
+    """Admin, ou chave de leitura numa requisição de leitura."""
+    return eh_admin(request) or (
+        request.method in METODOS_DE_LEITURA
+        and obter_protecao(request).chave_leitura(request.headers.get(HEADER_CHAVE))
+    )
+
+
+def _negar(request: Request) -> None:
+    chave = request.headers.get(HEADER_CHAVE)
+    if obter_protecao(request).chave_leitura(chave):
+        raise HTTPException(403, "credencial somente leitura")
+    raise HTTPException(
+        401, "credencial ausente ou inválida", headers={"WWW-Authenticate": HEADER_CHAVE}
+    )
+
+
 async def exigir_admin(request: Request) -> None:
-    """Dependência das rotas administrativas/de atendimento."""
+    """Rotas da equipe: admin; a chave de leitura passa só em GET."""
+    if not pode_ler(request):
+        _negar(request)
+
+
+async def exigir_admin_estrito(request: Request) -> None:
+    """Só admin, mesmo em GET (LGPD: a exportação traz dados pessoais completos)."""
     if not eh_admin(request):
-        raise HTTPException(
-            401, "credencial ausente ou inválida", headers={"WWW-Authenticate": HEADER_CHAVE}
-        )
+        _negar(request)
 
 
 def ip_cliente(request: Request) -> str:

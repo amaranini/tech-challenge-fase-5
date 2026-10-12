@@ -1,6 +1,7 @@
 """Login do dashboard (ADR 015): sem credencial não entra; hash PBKDF2 confere."""
 
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -93,3 +94,51 @@ def test_app_abre_fora_da_raiz_como_na_imagem(tmp_path: Path) -> None:
         check=False,
     )
     assert resultado.returncode == 0, resultado.stderr[-2000:]
+
+
+@pytest.fixture
+def app_com_avaliador(monkeypatch: pytest.MonkeyPatch) -> AppTest:
+    monkeypatch.setenv("API_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("DASHBOARD_USUARIO", "equipe")
+    monkeypatch.setenv("DASHBOARD_SENHA_HASH", _hash("s3nha"))
+    monkeypatch.setenv(
+        "DASHBOARD_USUARIOS",
+        json.dumps({"avaliador": {"senha_hash": _hash("aval"), "papel": "leitura"}}),
+    )
+    for modulo in ("web.comum", "web.autenticacao"):
+        monkeypatch.delitem(sys.modules, modulo, raising=False)
+    app = AppTest.from_file(str(APP), default_timeout=30)
+    app.run()
+    return app
+
+
+def test_avaliador_entra_como_somente_leitura(app_com_avaliador: AppTest) -> None:
+    app = app_com_avaliador
+    app.text_input[0].input("avaliador")
+    app.text_input[1].input("aval")
+    app.button[0].click().run()
+    assert app.session_state["usuario_logado"] == "avaliador"
+    assert app.session_state["papel"] == "leitura"
+    assert any("somente leitura" in c.value for c in app.sidebar.caption)
+
+
+def test_equipe_continua_admin(app_com_avaliador: AppTest) -> None:
+    app = app_com_avaliador
+    app.text_input[0].input("equipe")
+    app.text_input[1].input("s3nha")
+    app.button[0].click().run()
+    assert app.session_state["papel"] == "admin"
+
+
+def test_pii_mascarada_so_para_leitura(monkeypatch: pytest.MonkeyPatch) -> None:
+    from web import comum  # noqa: PLC0415
+
+    texto = "whatsapp:+5511987654321 · ana@exemplo.com · cpf 123.456.789-09 · R$ 800.000"
+    monkeypatch.setattr(comum, "somente_leitura", lambda: False)
+    assert comum.protegido(texto) == texto
+    monkeypatch.setattr(comum, "somente_leitura", lambda: True)
+    protegido = comum.protegido(texto)
+    assert "987654321" not in protegido
+    assert "ana@exemplo.com" not in protegido
+    assert "123.456.789-09" not in protegido
+    assert "R$ 800.000" in protegido  # valores não são telefone

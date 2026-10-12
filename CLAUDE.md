@@ -1,6 +1,6 @@
 # CLAUDE.md — Agente SDR Conversacional (vertical ativa: imobiliário)
 
-## Fase atual: Dia 5 — Etapa C (A e B commitadas; deploy no ar na Railway)
+## Fase atual: Dia 5 — Etapa D (A, B e C commitadas; deploy no ar na Railway)
 
 Ao fim de CADA etapa: parar, listar como verificar o critério de aceite e esperar o ok da PO.
 Commits só com ok da PO, um por etapa, na branch `dia-5` (nunca direto na `main`); ao fim
@@ -31,7 +31,7 @@ Dia 5 em 4 etapas (especificação completa no pedido da PO; resumo):
   LLM-as-judge com rubrica 1–5, latência e custo; evals/relatorio.md; scores no Langfuse.
 - **D — Documentação final:** README (do problema ao roadmap), docs/arquitetura.md (C4,
   sequência do turno, estados, core × vertical, índice de ADRs), docs/ia.md,
-  docs/roadmap-producao.md, docs/roteiro-demo.md. Commit final com tag `v1.0-entrega`.
+  docs/roadmap-producao.md; docs/roteiro-demo.md fica SÓ local (fora do git, a pedido da PO). Commit final com tag `v1.0-entrega`.
 
 ## Visão do projeto
 
@@ -221,7 +221,8 @@ evals/                     avaliação (Dia 5C, evals/README.md): cenarios/*.jso
                            cenarios.py (motor; também do `make llm`), cliente.py (API no ar),
                            metricas.py, ancoragem.py, juiz.py + rubrica_juiz_v1.md, runner.py
                            (`make eval`) → relatorio.md + resultados.json; analise.md à mão
-docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
+docs/                      arquitetura.md (C4, turno, estados, ADRs) · ia.md · seguranca.md ·
+                           deploy.md · roadmap-producao.md · adr/ (001–017)
 ```
 
 ### Regras (inegociáveis)
@@ -383,6 +384,9 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
   variaveis), `TEMPLATE_VARIAVEL_MAX_CARACTERES`. Passo a passo no README.
 - Langfuse: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` (vazio = no-op);
   link "🔎 trace" em cada resposta no chat/Fila.
+- Papéis: `LEITURA_API_KEYS` (só GET, nunca `/lgpd`) + `DASHBOARD_USUARIOS` JSON
+  (`{"avaliador": {"senha_hash": …, "papel": "leitura"}}`): leitura não age e vê PII
+  mascarada (`web/comum.protegido`). Usuário de avaliação público no README.
 - Segurança: `ADMIN_API_KEYS` (header `X-API-Key`; o web usa a 1ª), `DASHBOARD_USUARIO` +
   `DASHBOARD_SENHA_HASH` (`uv run python -m sdr.cli hash-senha`; formato com `:`, sem `$`),
   `MENSAGEM_MAX_CARACTERES` (2000), `LIMITE_*_POR_MINUTO`, `CONFIAR_PROXY`; `AMBIENTE=producao`

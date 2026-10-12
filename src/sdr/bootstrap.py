@@ -660,8 +660,10 @@ def _protecao(settings: Settings) -> ProtecaoHttp:
         logging.getLogger(__name__).warning(
             "ADMIN_API_KEYS vazio: rotas administrativas ABERTAS (só para ambiente local)"
         )
+    leitura = tuple(c.strip() for c in _segredo(settings.leitura_api_keys).split(",") if c.strip())
     return ProtecaoHttp(
         chaves_admin=chaves,
+        chaves_leitura=leitura,
         producao=producao,
         confiar_proxy=settings.confiar_proxy,
         limitador=LimitadorTaxaMemoria(),

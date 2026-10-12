@@ -12,8 +12,9 @@ estado.
 | `POST /conversas/mensagens`, `GET /conversas/{id}/mensagens` | site (chat web) | rate limit IP + remetente; tamanho máximo; histórico só de lead web e sem metadados internos |
 | `POST /webhooks/whatsapp/twilio` e `/meta` | provedor | assinatura (X-Twilio-Signature / X-Hub-Signature-256); idempotência; rate limit |
 | `/imoveis/*` (rotas da vertical) | site | rate limit por IP |
-| `/leads*`, `/painel/*`, `/agendamentos`, `/atendimentos/*`, `/lgpd/*`, `/demo/*` | equipe / dashboard | `X-API-Key` (ADMIN_API_KEYS); `/demo/*` não existe em produção |
-| Dashboard (Streamlit) | equipe | login (usuário + hash PBKDF2) |
+| `/leads*`, `/painel/*`, `/qualidade/*`, `/agendamentos`, `/atendimentos/*`, `/demo/*` | equipe / dashboard | `X-API-Key`: ADMIN_API_KEYS (tudo) ou LEITURA_API_KEYS (só GET); `/demo/*` não existe em produção |
+| `/lgpd/*` | equipe | só ADMIN_API_KEYS (a exportação traz dados pessoais completos) |
+| Dashboard (Streamlit) | equipe · avaliação | login (usuário + hash PBKDF2); papel `leitura`: não age, vê PII mascarada |
 | `/health` | plataforma | público, sem dados |
 
 ## Ameaças e controles
@@ -75,8 +76,13 @@ estado.
 - **Chat web sem autenticação:** quem souber o `lead_id` de um lead web lê aquela conversa
   (só texto, sem metadados). Em produção o widget gera um identificador aleatório
   (UUID) por visitante; o ideal é um token de sessão assinado.
-- **Login do dashboard é simples:** um usuário compartilhado, sem MFA, bloqueio por
+- **Login do dashboard é simples:** poucos usuários por env, sem MFA, bloqueio por
   sessão. Produção: IdP (SSO/OIDC) com usuários nominais e trilha de auditoria.
+- **Usuário de avaliação público:** as credenciais do avaliador estão no README (repositório
+  público). Por isso o papel é `leitura`: a chave da API só aceita GET e nunca a LGPD, as
+  ações (assumir, responder, devolver, avaliar resumo) somem e telefone, e-mail e CPF
+  aparecem mascarados. Ele ainda vê as conversas (texto) e pode conversar com a Lia pelo
+  chat web, que é público. Depois da avaliação: remover o usuário e girar a chave.
 - **Chave de admin única e estática:** rotação manual (aceita lista para trocar sem
   parar); sem escopos por papel.
 - **Fora do alcance da anonimização:** rastros já enviados ao Langfuse (chegam com PII

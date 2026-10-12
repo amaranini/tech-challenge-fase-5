@@ -208,3 +208,25 @@ async def test_limitador_memoria_libera_com_o_tempo() -> None:
     assert await limitador.consumir("k", 2) == 0.0
     assert await limitador.consumir("outra", 2) == 0.0
     assert await limitador.consumir("k", 0) == 0.0  # 0 = desligado
+
+
+LEITURA = "chave-leitura"
+
+
+@pytest.mark.parametrize(
+    ("metodo", "caminho", "esperado"),
+    [
+        ("GET", "/leads", 200),  # leitura liberada
+        ("GET", "/conversas/whatsapp:+5511987654321/mensagens", 200),
+        ("POST", "/atendimentos/lead-1/assumir", 403),  # ação: só admin
+        ("POST", "/leads/lead-1/resumo/avaliacao", 403),
+        ("GET", "/lgpd/leads/lead-1/exportacao", 403),  # LGPD: só admin, nem em GET
+    ],
+)
+async def test_chave_de_leitura_so_le(metodo: str, caminho: str, esperado: int) -> None:
+    cliente, *_ = _api(ProtecaoHttp(chaves_admin=(CHAVE,), chaves_leitura=(LEITURA,)))
+    async with cliente:
+        resposta = await cliente.request(
+            metodo, caminho, headers={"X-API-Key": LEITURA}, json={"responsavel": "x", "util": True}
+        )
+    assert resposta.status_code == esperado, resposta.text

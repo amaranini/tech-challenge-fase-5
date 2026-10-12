@@ -19,6 +19,7 @@ from web.comum import (
     formatar_horario,
     percentual,
     periodo_selecionado,
+    protegido,
 )  # fmt: skip
 
 COMPORTAMENTOS = {
@@ -235,7 +236,7 @@ def online(periodo: dict[str, str], abandono_horas: int, apenas_reais: bool) -> 
             )
             tipo = TIPOS_INCIDENTE.get(i["tipo"], i["tipo"])
             st.markdown(
-                f"{tipo} · {formatar_horario(i['ocorrido_em'])} · `{i['lead_id']}` — "
+                f"{tipo} · {formatar_horario(i['ocorrido_em'])} · `{protegido(i['lead_id'])}` — "
                 f"{i['detalhe']}" + (f" · {links}" if links else "")
             )
 

@@ -5,6 +5,7 @@ Consome SOMENTE a API HTTP — nunca o banco.
 """
 
 import os
+import re
 import uuid
 from datetime import date, datetime, time, timedelta
 from typing import Any
@@ -13,11 +14,48 @@ import altair as alt
 import httpx
 import streamlit as st
 
+from web.autenticacao import somente_leitura
+
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
-# Chave de admin da API: as telas da equipe usam rotas protegidas. API_KEY ou, se vazio,
-# a primeira de ADMIN_API_KEYS (o mesmo .env da API no docker compose).
+# Chave da API conforme o papel de quem está logado: admin (API_KEY ou a 1ª de
+# ADMIN_API_KEYS) ou somente leitura (API_KEY_LEITURA ou a 1ª de LEITURA_API_KEYS).
 _CHAVE = os.environ.get("API_KEY") or os.environ.get("ADMIN_API_KEYS", "").split(",")[0].strip()
-HEADERS = {"X-API-Key": _CHAVE} if _CHAVE else {}
+_CHAVE_LEITURA = (
+    os.environ.get("API_KEY_LEITURA")
+    or os.environ.get("LEITURA_API_KEYS", "").split(",")[0].strip()
+)
+
+
+def cabecalhos() -> dict[str, str]:
+    chave = _CHAVE_LEITURA if somente_leitura() else _CHAVE
+    return {"X-API-Key": chave} if chave else {}
+
+
+# Quem só lê (ex.: avaliação) não vê telefone, e-mail nem CPF dos leads.
+_CPF = re.compile(r"\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b")
+_EMAIL = re.compile(r"\b([A-Za-z0-9._%+-])[A-Za-z0-9._%+-]*@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b")
+_TELEFONE = re.compile(r"(\+?\d[\d\s().-]{8,}\d)")
+MIN_DIGITOS_TELEFONE, MAX_DIGITOS_TELEFONE = 10, 15
+
+
+def _mascarar_telefone(m: re.Match[str]) -> str:
+    digitos = re.sub(r"\D", "", m.group(1))
+    if not MIN_DIGITOS_TELEFONE <= len(digitos) <= MAX_DIGITOS_TELEFONE:
+        return m.group(1)
+    prefixo = "+" if m.group(1).startswith("+") else ""
+    return f"{prefixo}{digitos[:4]}{'*' * (len(digitos) - 8)}{digitos[-4:]}"
+
+
+def protegido(texto: object) -> str:
+    """Texto como deve aparecer para quem está logado (PII mascarada no papel leitura)."""
+    texto = str(texto)
+    if not somente_leitura():
+        return texto
+    texto = _CPF.sub("***.***.***-**", texto)
+    texto = _EMAIL.sub(lambda m: f"{m.group(1)}***@{m.group(2)}", texto)
+    return _TELEFONE.sub(_mascarar_telefone, texto)
+
+
 TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 POLLING_SEGUNDOS = 1.5
 EVENTOS_NO_PAINEL = 20
@@ -81,7 +119,7 @@ def rotulo_lead(lead: dict[str, Any]) -> str:
     """ "📱 Ana (whatsapp:+5511…)" — canal, nome do perfil (se houver) e id."""
     icone = CANAIS.get(lead.get("canal", "web"), "")
     nome = f"{lead['nome']} · " if lead.get("nome") else ""
-    return f"{icone} {nome}{lead['lead_id']}"
+    return protegido(f"{icone} {nome}{lead['lead_id']}")
 
 
 def mostrar_envio(mensagem: dict[str, Any]) -> None:
@@ -102,8 +140,9 @@ def mostrar_envio(mensagem: dict[str, Any]) -> None:
 
 
 def md(texto: object) -> str:
-    """Escapa `$` (o markdown do Streamlit trata `$...$` como LaTeX: "R$ 800.000")."""
-    return str(texto).replace("$", r"\$")
+    """Escapa `$` (o markdown do Streamlit trata `$...$` como LaTeX: "R$ 800.000") e
+    mascara PII para quem só lê."""
+    return protegido(texto).replace("$", r"\$")
 
 
 def formatar_valor(campo: str, valor: object) -> str:
@@ -295,6 +334,8 @@ def mostrar_followup(lead: dict[str, Any]) -> None:
     )
     colunas = st.columns([3, 2])
     colunas[0].caption(texto)
+    if somente_leitura():
+        return
     if colunas[1].button("⏩ Simular inatividade", key="simular_inatividade") and (
         falha := api_post(f"/demo/leads/{lead['lead_id']}/simular-inatividade")
     ):
@@ -316,7 +357,9 @@ def mostrar_resumo(lead_id: str, *, recolhido: bool) -> None:
     """Resumo para quem vai atender (tela Fila). `recolhido`: num expander, para ler antes
     de assumir; senão, num quadro aberto (dentro de outro expander não cabe expander)."""
     try:
-        resposta = httpx.get(f"{API_URL}/leads/{lead_id}/resumo", headers=HEADERS, timeout=TIMEOUT)
+        resposta = httpx.get(
+            f"{API_URL}/leads/{lead_id}/resumo", headers=cabecalhos(), timeout=TIMEOUT
+        )
     except httpx.HTTPError:
         return
     if resposta.status_code == httpx.codes.NOT_FOUND:
@@ -345,6 +388,8 @@ def mostrar_resumo(lead_id: str, *, recolhido: bool) -> None:
 def _avaliar_resumo(lead_id: str, versao: int) -> None:
     """ "Útil / não útil" de quem atende (evento ResumoAvaliado → página Qualidade da IA)."""
     chave = f"resumo_avaliado:{lead_id}:{versao}"
+    if somente_leitura():
+        return
     if st.session_state.get(chave):
         st.caption(f"Obrigado pelo retorno ({st.session_state[chave]}).")
         return
@@ -372,7 +417,9 @@ def _avaliar_resumo(lead_id: str, versao: int) -> None:
 
 
 def api_get(caminho: str, **params: Any) -> Any:
-    resposta = httpx.get(f"{API_URL}{caminho}", params=params, headers=HEADERS, timeout=TIMEOUT)
+    resposta = httpx.get(
+        f"{API_URL}{caminho}", params=params, headers=cabecalhos(), timeout=TIMEOUT
+    )
     resposta.raise_for_status()
     return resposta.json()
 
@@ -381,7 +428,7 @@ def api_enviar(lead_id: str, texto: str) -> dict[str, Any]:
     resposta = httpx.post(
         f"{API_URL}/conversas/mensagens",
         json={"lead_id": lead_id, "texto": texto},
-        headers=HEADERS,
+        headers=cabecalhos(),
         timeout=TIMEOUT,
     )
     if resposta.is_error:
@@ -417,7 +464,7 @@ def api_post(caminho: str, corpo: dict[str, Any] | None = None) -> str | None:
     """POST na API; devolve a mensagem de erro (ou None se deu certo)."""
     try:
         resposta = httpx.post(
-            f"{API_URL}{caminho}", json=corpo or {}, headers=HEADERS, timeout=TIMEOUT
+            f"{API_URL}{caminho}", json=corpo or {}, headers=cabecalhos(), timeout=TIMEOUT
         )
     except httpx.HTTPError as erro:
         return str(erro)

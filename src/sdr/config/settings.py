@@ -6,7 +6,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    # env_ignore_empty: "CHAVE=" vazio no .env vale como não definida (usa o padrão) — o
+    # .env.example copiado sem editar precisa subir (WHATSAPP_LIMITE_CARACTERES= quebrava).
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore", env_ignore_empty=True
+    )
 
     ambiente: str = "local"
     log_level: str = "INFO"
@@ -112,6 +116,8 @@ class Settings(BaseSettings):
     # Chaves aceitas no header X-API-Key das rotas administrativas/de atendimento (vírgula).
     # Vazio: em local, rotas abertas (com aviso no log); em produção a API não sobe.
     admin_api_keys: SecretStr | None = None
+    # Chaves somente leitura (GET; nunca LGPD) — ex.: o usuário de avaliação do dashboard.
+    leitura_api_keys: SecretStr | None = None
     confiar_proxy: bool = False  # True atrás de proxy (Railway/Render): IP do X-Forwarded-For
     limite_remetente_por_minuto: int = 20  # mensagens por remetente (chat web e webhook)
     limite_ip_por_minuto: int = 60  # requisições por IP no chat público
