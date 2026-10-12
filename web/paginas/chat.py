@@ -24,6 +24,7 @@ from web.comum import (
     TIMEOUT,
     api_enviar,
     api_get,
+    cabecalhos,
     descrever_agendamento,
     descrever_evento,
     md,
@@ -125,7 +126,7 @@ def painel(lead_id: str) -> None:
     """Qualificação em tempo real (GET /leads/{lead_id}): intenção, ficha, score, ação."""
     st.subheader("📋 Qualificação")
     try:
-        resposta = httpx.get(f"{API_URL}/leads/{lead_id}", timeout=TIMEOUT)
+        resposta = httpx.get(f"{API_URL}/leads/{lead_id}", headers=cabecalhos(), timeout=TIMEOUT)
     except httpx.HTTPError as erro:
         st.warning(f"Sem conexão com a API: {erro}")
         return

@@ -33,6 +33,7 @@ from sdr.core.application.ports.repositorios import (
     LeadRepository,
 )
 from sdr.core.application.ports.resumo import RedatorResumoPort, ResumoRepository
+from sdr.core.application.use_cases.lgpd import anonimizado
 from sdr.core.domain.agenda import Agendamento
 from sdr.core.domain.conversa import Lead, Papel
 from sdr.core.domain.eventos import EventoLead, TipoEvento
@@ -121,8 +122,8 @@ class GerarResumoHandoff:
 
     async def executar(self, lead_id: UUID, gatilho: str) -> ResultadoResumo | None:
         lead = await self._leads.obter(lead_id)
-        if lead is None:
-            return None
+        if lead is None or anonimizado(lead):
+            return None  # LGPD: titular anonimizado não ganha resumo nem registro no CRM
         fatos = await self._fatos(lead)
         anterior = await self._resumos.ultimo(lead_id)
         impressao = fatos.impressao_digital()
@@ -183,6 +184,12 @@ class GerarResumoHandoff:
             tokens_entrada=rascunho.tokens_entrada,
             tokens_saida=rascunho.tokens_saida,
         )
+        # A redação leva segundos: se o titular foi anonimizado nesse meio-tempo (LGPD), o
+        # resumo não é gravado — antes ele "voltava" depois da limpeza (visto no Dia 5).
+        atual = await self._leads.obter(lead_id)
+        if atual is None or anonimizado(atual):
+            logger.info("Lead %s anonimizado durante a redação: resumo descartado", lead_id)
+            return ResultadoResumo(resumo, nova_versao=False)
         await self._resumos.salvar(resumo)
         registro = await self._crm.registrar(lead, resumo, fatos.agendamento)
         await self._eventos.registrar(

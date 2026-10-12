@@ -3,9 +3,11 @@
 Compartilhado pela rota HTTP e pelo CatalogoPort — e, na Etapa C, pela tool do agente.
 """
 
+import re
+import unicodedata
 from decimal import Decimal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from sdr.verticals.imobiliario.catalogo.domain.criterios import CriteriosBusca
 from sdr.verticals.imobiliario.catalogo.domain.imovel import Finalidade, TipoImovel, Zona
@@ -24,6 +26,22 @@ class Filtros(BaseModel):
     distancia_max_metro_m: int | None = Field(default=None, ge=0)
     aceita_pet: bool | None = None
     mobiliado: bool | None = None
+
+    @model_validator(mode="after")
+    def _zona_dita_como_bairro(self) -> "Filtros":
+        """ "centro", "zona sul", "região oeste" em `bairros` são ZONAS: nenhum bairro tem
+        esse nome, e o filtro voltava vazio — a Lia dizia "não temos" com o IMV-057 na
+        base (avaliação do Dia 5)."""
+        bairros: list[str] = []
+        zonas = list(self.zonas)
+        for bairro in self.bairros:
+            zona = _como_zona(bairro)
+            if zona is None:
+                bairros.append(bairro)
+            elif zona not in zonas:
+                zonas.append(zona)
+        self.bairros, self.zonas = bairros, zonas
+        return self
 
     def para_dominio(self) -> CriteriosBusca:
         return CriteriosBusca(
@@ -57,3 +75,12 @@ class Filtros(BaseModel):
             aceita_pet=c.aceita_pet,
             mobiliado=c.mobiliado,
         )
+
+
+def _como_zona(texto: str) -> Zona | None:
+    sem_acento = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode()
+    nome = re.sub(r"^(zona|regiao)\s+", "", " ".join(sem_acento.casefold().split()))
+    try:
+        return Zona(nome)
+    except ValueError:
+        return None

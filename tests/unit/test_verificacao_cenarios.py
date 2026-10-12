@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.apoio.cenarios import carregar_cenarios, confere, divergencias, divergencias_resumo
+from evals.cenarios import carregar_cenarios, confere, divergencias, divergencias_resumo
 
 ESTADO = {
     "intencao": "compra",

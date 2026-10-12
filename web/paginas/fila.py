@@ -10,6 +10,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # raiz: pacote "web"
 
+from web.autenticacao import somente_leitura
 from web.comum import (
     CANAIS_ROTULO,
     api_get,
@@ -39,7 +40,9 @@ def _cartao_aguardando(item: dict[str, Any], quem: str) -> None:
         else:
             colunas[1].markdown(espera)
         colunas[2].markdown(f"{item['intencao'] or '—'} · score {item['score'] or '—'}")
-        if colunas[3].button("Assumir", key=f"assumir-{lead}", type="primary") and (
+        if somente_leitura():
+            colunas[3].caption("somente leitura")
+        elif colunas[3].button("Assumir", key=f"assumir-{lead}", type="primary") and (
             falha := api_post(f"/atendimentos/{lead}/assumir", {"responsavel": quem})
         ):
             st.error(falha)
@@ -59,6 +62,8 @@ def _em_atendimento(item: dict[str, Any], quem: str) -> None:
             st.markdown(md(f"**{autor}:** {m['texto']}"))
             if m["papel"] != "lead":
                 mostrar_envio(m)
+        if somente_leitura():
+            return
         with st.form(f"responder-{lead}", clear_on_submit=True):
             texto = st.text_area("Responder ao lead", key=f"texto-{lead}")
             if st.form_submit_button("Enviar") and texto.strip():

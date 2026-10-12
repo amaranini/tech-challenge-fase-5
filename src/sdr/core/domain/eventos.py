@@ -36,6 +36,10 @@ class TipoEvento(StrEnum):
     LEAD_OPT_OUT = "LeadOptOut"
     ENVIO_TEMPLATE_INDISPONIVEL = "EnvioTemplateIndisponivel"
     MENSAGEM_NAO_ENTREGUE = "MensagemNaoEntregue"
+    TENTATIVA_INJECAO = "TentativaInjecaoDetectada"
+    RESPOSTA_REPROVADA = "RespostaReprovadaNaValidacao"
+    DADOS_ANONIMIZADOS = "DadosLeadAnonimizados"
+    RESUMO_AVALIADO = "ResumoAvaliado"  # "útil / não útil" de quem atende
 
 
 @dataclass(frozen=True)

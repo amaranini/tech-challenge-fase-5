@@ -44,7 +44,10 @@ from sdr.core.application.use_cases.followup import ProgramarFollowUps
 from sdr.core.domain.agente import Persona, RespostaAgente
 from sdr.core.domain.atendimento import EstadoAtendimento
 from sdr.core.domain.catalogo import ItemCatalogo
-from sdr.core.domain.conversa import Conversa, Lead, Mensagem, Papel, StatusMensagem
+from sdr.core.domain.conversa import Conversa, Lead, Mensagem, Papel, StatusMensagem, agora
+from sdr.core.domain.eventos import EventoLead, TipoEvento
+from sdr.core.domain.pii import mascarar_cpf
+from sdr.core.domain.seguranca import promessas_indevidas
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +141,12 @@ class ProcessarTurno:
                 return None
             ids_lote = {m.id for m in lote}
             historico = await self._conversas.ultimas_mensagens(conversa.id, self._janela_historico)
-            entrada = EntradaAgente(lead=lead, historico=historico, texto=_texto_do_lote(lote))
+            entrada = EntradaAgente(
+                lead=lead,
+                # Minimização: o CPF não serve para a conversa e não vai para o LLM.
+                historico=[replace(m, texto=mascarar_cpf(m.texto)) for m in historico],
+                texto=mascarar_cpf(_texto_do_lote(lote)),
+            )
             rastro.entrada = entrada.texto  # as mensagens do lote, agregadas
             itens: tuple[ItemCatalogo, ...] = ()
             invalidos: list[str] = []
@@ -278,28 +286,71 @@ class ProcessarTurno:
     async def _responder_sem_inventar(
         self, entrada: EntradaAgente
     ) -> tuple[RespostaAgente, tuple[ItemCatalogo, ...], list[str], bool]:
-        """Garante que todo código de item citado existe na base.
+        """Validação de saída (ADR 015): todo código de item citado existe na base e não há
+        promessa comercial fora dela (desconto, garantia...).
 
-        Se o agente citar algo inexistente, pede UMA correção; persistindo, responde com
-        a mensagem de fallback da persona (melhor não sugerir nada do que inventar).
+        Reprovada, pede UMA correção; persistindo, responde com a mensagem segura da persona
+        (melhor não sugerir nada do que inventar). Reprovação vira evento.
         """
         resposta = await self._agente.responder(entrada)
-        itens, invalidos = await self._conferir_citacoes(resposta)
-        if not invalidos:
+        itens, invalidos, promessas = await self._validar_saida(resposta)
+        if not invalidos and not promessas:
             return resposta, itens, [], False
 
-        logger.warning("Agente citou códigos inexistentes: %s — pedindo correção", invalidos)
-        correcao = (
-            f"ATENÇÃO: os códigos {', '.join(invalidos)} NÃO existem na base. Reescreva a "
-            "resposta citando somente itens devolvidos pela ferramenta de busca."
+        logger.warning(
+            "Resposta reprovada (códigos inexistentes: %s; promessas: %s) — pedindo correção",
+            invalidos,
+            list(promessas),
         )
+        problemas: list[str] = []
+        if invalidos:
+            problemas.append(
+                f"os códigos {', '.join(invalidos)} NÃO existem na base: cite somente itens "
+                "devolvidos pela ferramenta de busca"
+            )
+        if promessas:
+            problemas.append(
+                "a resposta prometeu desconto, garantia ou condição que não está na base: não "
+                "prometa nada disso (negociação é com a equipe)"
+            )
+        correcao = f"ATENÇÃO — reescreva a resposta: {'; '.join(problemas)}."
+        primeira = (invalidos, promessas)
         resposta = await self._agente.responder(replace(entrada, instrucao_adicional=correcao))
-        itens, invalidos = await self._conferir_citacoes(resposta)
-        if not invalidos:
-            return resposta, itens, [], False
+        itens, invalidos, promessas = await self._validar_saida(resposta)
+        if not invalidos and not promessas:
+            return self._com_reprovacao(entrada, resposta, *primeira, False), itens, [], False
 
-        logger.error("Agente insistiu em códigos inexistentes: %s — usando fallback", invalidos)
-        return replace(resposta, texto=self._persona.mensagem_fallback), (), invalidos, True
+        logger.error("Resposta reprovada de novo — usando a mensagem segura da persona")
+        segura = replace(resposta, texto=self._persona.mensagem_fallback)
+        return (
+            self._com_reprovacao(entrada, segura, invalidos, promessas, True),
+            (),
+            invalidos,
+            True,
+        )
+
+    async def _validar_saida(
+        self, resposta: RespostaAgente
+    ) -> tuple[tuple[ItemCatalogo, ...], list[str], tuple[str, ...]]:
+        itens, invalidos = await self._conferir_citacoes(resposta)
+        promessas = promessas_indevidas(resposta.texto, self._persona.padroes_promessa)
+        return itens, invalidos, promessas
+
+    @staticmethod
+    def _com_reprovacao(
+        entrada: EntradaAgente,
+        resposta: RespostaAgente,
+        invalidos: list[str],
+        promessas: tuple[str, ...],
+        fallback: bool,
+    ) -> RespostaAgente:
+        evento = EventoLead(
+            entrada.lead.id,
+            TipoEvento.RESPOSTA_REPROVADA,
+            agora(),
+            {"codigos_invalidos": invalidos, "promessas": list(promessas), "fallback": fallback},
+        )
+        return replace(resposta, eventos=(*resposta.eventos, evento))
 
     async def _conferir_citacoes(
         self, resposta: RespostaAgente

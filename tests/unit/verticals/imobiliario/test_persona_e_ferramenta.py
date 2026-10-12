@@ -3,6 +3,7 @@ import json
 import pytest
 
 from sdr.core.application.ferramentas.buscar_catalogo import FerramentaBuscarCatalogo
+from sdr.core.domain.seguranca import promessas_indevidas
 from sdr.verticals.imobiliario.catalogo.adapters.catalogo_imobiliario import CatalogoImobiliario
 from sdr.verticals.imobiliario.catalogo.adapters.esquema_filtros import Filtros
 from sdr.verticals.imobiliario.catalogo.adapters.ferramenta_buscar_imoveis import (
@@ -61,3 +62,25 @@ async def test_tool_buscar_imoveis_de_ponta_a_ponta_com_fakes() -> None:
     assert json.loads(ok.conteudo)["itens"][0]["codigo"] == "IMV-001"
     assert alucinado.erro is not None
     assert alucinado.itens == ()
+
+
+def test_promessas_do_segmento_sao_checadas_na_saida() -> None:
+    persona = carregar_persona()
+    extras = persona.padroes_promessa
+    assert promessas_indevidas("O proprietário aceita 700 mil!", extras)
+    assert promessas_indevidas("Seu financiamento sai aprovado", extras)
+    assert promessas_indevidas("o dono aceita pet", extras) == ()  # atributo da base
+    assert "corretor" in persona.mensagem_fallback  # resposta segura: próximo passo real
+
+
+@pytest.mark.parametrize("bairro", ["centro", "Centro", "zona sul", "Zona Oeste", "região norte"])
+def test_zona_dita_como_bairro_vira_zona(bairro: str) -> None:
+    """O LLM mandou bairros=["centro"] e a busca voltava vazia (avaliação do Dia 5)."""
+    filtros = Filtros(bairros=[bairro, "Liberdade"])
+    assert filtros.bairros == ["Liberdade"]
+    assert len(filtros.zonas) == 1
+    assert filtros.zonas[0].value in bairro.casefold().replace("região", "").split()[-1]
+
+
+def test_zona_ja_presente_nao_duplica() -> None:
+    assert Filtros(zonas=[Zona.CENTRO], bairros=["centro"]).zonas == [Zona.CENTRO]

@@ -13,18 +13,17 @@ from typing import Any
 import pytest
 from streamlit.testing.v1 import AppTest
 
+from evals.cenarios import Cenario, carregar_cenarios, divergencias, divergencias_resumo
 from tests.apoio.api_viva import (
     acao_da_equipe,
     aguardar_resposta,
     aguardar_resumo,
-    enviar,
     exigir_api,
     historico,
     obter_lead,
     postar,
 )
 from tests.apoio.banco_vivo import registro_crm
-from tests.apoio.cenarios import Cenario, carregar_cenarios, divergencias, divergencias_resumo
 
 pytestmark = pytest.mark.llm
 
@@ -99,12 +98,16 @@ def test_cenario(cenario: Cenario) -> None:
             continue
         esperado = fala.esperado or {}
         if esperado.get("sem_resposta"):
-            postar(lead_id, fala.texto)
+            postar(lead_id, *fala.mensagens)
             ultima = aguardar_resposta(lead_id)["mensagens"][-1]
             assert ultima["papel"] == "lead", f"fala {numero}: a IA respondeu {ultima['texto']!r}"
             print("[lia]  (em silêncio: atendimento humano)")
         else:
-            resposta = enviar(lead_id, fala.texto)["resposta"]["texto"]
+            postar(lead_id, *fala.mensagens)  # picadas: várias, a Lia responde uma vez
+            ultima = aguardar_resposta(lead_id)["mensagens"][-1]
+            assert ultima["papel"] == "assistente", f"fala {numero}: sem resposta da Lia"
+            resposta = ultima["texto"]
+            print(f"[lia]  {resposta}")
             faltando = [
                 trecho
                 for trecho in esperado.get("resposta_contem", [])

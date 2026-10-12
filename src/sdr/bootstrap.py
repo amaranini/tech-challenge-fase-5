@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sdr.config.settings import Settings, obter_settings
 from sdr.core.adapters.inbound.http.app import criar_app
 from sdr.core.adapters.inbound.http.dependencias import Dependencias
+from sdr.core.adapters.inbound.http.protecao import ProtecaoHttp
 from sdr.core.adapters.inbound.http.routers.whatsapp_meta import WebhookMeta
 from sdr.core.adapters.inbound.http.routers.whatsapp_twilio import WebhookTwilio
 from sdr.core.adapters.logs import instalar_mascara_pii
@@ -45,14 +46,20 @@ from sdr.core.adapters.outbound.canais.whatsapp_twilio import (
 )
 from sdr.core.adapters.outbound.embeddings.fastembed_adapter import EmbeddingFastembed
 from sdr.core.adapters.outbound.eventos.publicador_asyncio import PublicadorEventosAsyncio
+from sdr.core.adapters.outbound.limite_taxa.memoria import LimitadorTaxaMemoria
 from sdr.core.adapters.outbound.llm.openai_adapter import LLMOpenAI
 from sdr.core.adapters.outbound.observabilidade.langfuse_rastreio import RastreioLangfuse
 from sdr.core.adapters.outbound.observabilidade.llm_observado import LLMObservado
 from sdr.core.adapters.outbound.persistence.agenda_postgres import AgendaPostgres
 from sdr.core.adapters.outbound.persistence.consultas_painel_sql import ConsultasPainelSql
+from sdr.core.adapters.outbound.persistence.consultas_qualidade_sql import (
+    AvaliacoesOfflineSql,
+    ConsultasQualidadeSql,
+)
 from sdr.core.adapters.outbound.persistence.crm_postgres import CRMPostgresMock
 from sdr.core.adapters.outbound.persistence.database import criar_engine, criar_fabrica_sessao
 from sdr.core.adapters.outbound.persistence.followups_sql import FollowUpRepositorySql
+from sdr.core.adapters.outbound.persistence.lgpd_sql import DadosTitularSql
 from sdr.core.adapters.outbound.persistence.repositorios_conversa_sql import (
     ConversaRepositorySql,
     EntregaRepositorySql,
@@ -67,6 +74,10 @@ from sdr.core.adapters.outbound.persistence.verificador_saude_postgres import (
 from sdr.core.adapters.outbound.relogio import RelogioSistema
 from sdr.core.adapters.outbound.turnos.agendador_debounce import AgendadorDebounce
 from sdr.core.application.consultas.painel import ConsultarPainel
+from sdr.core.application.consultas.qualidade import (
+    ConsultarQualidade,
+    RegistrarAvaliacaoOffline,
+)
 from sdr.core.application.ports.canal import CanalMensagemPort
 from sdr.core.application.ports.llm import LLMPort
 from sdr.core.application.ports.observabilidade import RastreioNulo, RastreioPort
@@ -77,6 +88,7 @@ from sdr.core.application.use_cases.atendimento import (
     EnviarMensagemResponsavel,
     ListarAtendimentos,
 )
+from sdr.core.application.use_cases.avaliar_resumo import AvaliarResumo
 from sdr.core.application.use_cases.conduzir_agendamento import ConduzirAgendamento
 from sdr.core.application.use_cases.consultar_agenda_e_resumo import (
     ListarAgendamentos,
@@ -99,6 +111,7 @@ from sdr.core.application.use_cases.followup import (
     ProgramarFollowUps,
 )
 from sdr.core.application.use_cases.gerar_resumo_handoff import GerarResumoHandoff
+from sdr.core.application.use_cases.lgpd import AnonimizarLead, ExportarDadosLead
 from sdr.core.application.use_cases.obter_lead import ObterLead
 from sdr.core.application.use_cases.processar_turno import ProcessarTurno
 from sdr.core.application.use_cases.receber_mensagem import ReceberMensagem
@@ -113,6 +126,9 @@ from sdr.verticals.imobiliario.pack import PackImobiliario
 VERTICAIS: dict[str, Callable[[], VerticalPack]] = {
     "imobiliario": PackImobiliario,
 }
+
+
+AMBIENTE_PRODUCAO = "producao"
 
 
 def _llm_openai(settings: Settings, modelo: str) -> LLMPort:
@@ -154,6 +170,22 @@ def _rastreio(settings: Settings, vertical: VerticalMontada) -> RastreioPort:
             "prompts_core": VERSOES_PROMPTS,
         },
     )
+
+
+def _versao_agente(settings: Settings, vertical: VerticalMontada) -> dict[str, object]:
+    """O que identifica a versão em produção (página Qualidade da IA e eval offline)."""
+    padrao = settings.llm_modelo
+    return {
+        "vertical": settings.vertical,
+        "persona": vertical.persona.versao_prompt,
+        "prompts_core": VERSOES_PROMPTS,
+        "modelos": {
+            "roteador": settings.llm_model_router or padrao,
+            "extracao": settings.llm_model_extraction or padrao,
+            "agente": settings.llm_model_agent or padrao,
+            "resumo": settings.llm_model_summary or padrao,
+        },
+    }
 
 
 def _segredo(valor: SecretStr | None) -> str:
@@ -349,9 +381,15 @@ class Container:
     webhook_meta: WebhookMeta | None
     rastreio: RastreioPort
     consultar_painel: ConsultarPainel
+    consultar_qualidade: ConsultarQualidade
+    registrar_avaliacao_offline: RegistrarAvaliacaoOffline
+    avaliar_resumo: AvaliarResumo
+    versao_agente: dict[str, object]
     whatsapp: CanalWhatsApp | None
     agenda: AgendaPostgres
     relogio: RelogioSistema
+    exportar_dados_lead: ExportarDadosLead
+    anonimizar_lead: AnonimizarLead
     settings: Settings
 
     async def semear_agenda(self) -> int:
@@ -543,7 +581,12 @@ def montar_container(settings: Settings | None = None) -> Container:
     )
     agendador.definir_executor(processar_turno.executar)
     receber_mensagem = ReceberMensagem(
-        leads, conversas, eventos, agendador, followups=programar_followups
+        leads,
+        conversas,
+        eventos,
+        agendador,
+        followups=programar_followups,
+        limite_texto=settings.mensagem_max_caracteres,
     )
     webhook_twilio, webhook_meta = _webhooks_whatsapp(
         settings, whatsapp, receber_mensagem, atualizar_entrega
@@ -588,10 +631,45 @@ def montar_container(settings: Settings | None = None) -> Container:
         webhook_meta=webhook_meta,
         rastreio=rastreio,
         consultar_painel=ConsultarPainel(ConsultasPainelSql(sessoes)),
+        consultar_qualidade=ConsultarQualidade(
+            ConsultasQualidadeSql(sessoes),
+            AvaliacoesOfflineSql(sessoes),
+            settings.custo_llm_por_milhao,
+        ),
+        registrar_avaliacao_offline=RegistrarAvaliacaoOffline(AvaliacoesOfflineSql(sessoes)),
+        avaliar_resumo=AvaliarResumo(leads, resumos, eventos, relogio),
+        versao_agente=_versao_agente(settings, vertical),
         whatsapp=whatsapp,
         agenda=agenda,
         relogio=relogio,
+        exportar_dados_lead=ExportarDadosLead(leads, DadosTitularSql(sessoes)),
+        anonimizar_lead=AnonimizarLead(
+            leads, DadosTitularSql(sessoes), eventos, relogio, agenda=agenda, followups=followups
+        ),
         settings=settings,
+    )
+
+
+def _protecao(settings: Settings) -> ProtecaoHttp:
+    """Chaves de admin e rate limit (ADR 015). Em produção, sem chave a API não sobe."""
+    chaves = tuple(c.strip() for c in _segredo(settings.admin_api_keys).split(",") if c.strip())
+    producao = settings.ambiente == AMBIENTE_PRODUCAO
+    if producao and not chaves:
+        raise RuntimeError("AMBIENTE=producao exige ADMIN_API_KEYS (rotas administrativas)")
+    if not chaves:
+        logging.getLogger(__name__).warning(
+            "ADMIN_API_KEYS vazio: rotas administrativas ABERTAS (só para ambiente local)"
+        )
+    leitura = tuple(c.strip() for c in _segredo(settings.leitura_api_keys).split(",") if c.strip())
+    return ProtecaoHttp(
+        chaves_admin=chaves,
+        chaves_leitura=leitura,
+        producao=producao,
+        confiar_proxy=settings.confiar_proxy,
+        limitador=LimitadorTaxaMemoria(),
+        limite_remetente_por_minuto=settings.limite_remetente_por_minuto,
+        limite_ip_por_minuto=settings.limite_ip_por_minuto,
+        limite_ip_webhook_por_minuto=settings.limite_ip_webhook_por_minuto,
     )
 
 
@@ -599,6 +677,7 @@ def criar_aplicacao(settings: Settings | None = None) -> FastAPI:
     settings = settings or obter_settings()
     logging.basicConfig(level=settings.log_level)
     instalar_mascara_pii()
+    protecao = _protecao(settings)
     container = montar_container(settings)
 
     async def aquecer_embedding() -> None:
@@ -630,8 +709,15 @@ def criar_aplicacao(settings: Settings | None = None) -> FastAPI:
             enviar_mensagem_responsavel=lambda: container.enviar_mensagem_responsavel,
             programar_followups=lambda: container.programar_followups,
             consultar_painel=lambda: container.consultar_painel,
+            consultar_qualidade=lambda: container.consultar_qualidade,
+            registrar_avaliacao_offline=lambda: container.registrar_avaliacao_offline,
+            avaliar_resumo=lambda: container.avaliar_resumo,
+            versao_agente=container.versao_agente,
             whatsapp_twilio=lambda: container.webhook_twilio,
             whatsapp_meta=lambda: container.webhook_meta,
+            protecao=protecao,
+            exportar_dados_lead=lambda: container.exportar_dados_lead,
+            anonimizar_lead=lambda: container.anonimizar_lead,
         ),
         routers=container.vertical.routers,
         ao_iniciar=[

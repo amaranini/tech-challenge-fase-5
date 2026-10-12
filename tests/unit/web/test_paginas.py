@@ -9,7 +9,10 @@ from streamlit.testing.v1 import AppTest
 PAGINAS = Path(__file__).resolve().parents[3] / "web" / "paginas"
 
 
-@pytest.mark.parametrize("pagina", ["visao_geral", "leads", "fila", "agenda", "followups", "chat"])
+PAGINAS_DASHBOARD = ["visao_geral", "leads", "fila", "agenda", "followups", "qualidade", "chat"]
+
+
+@pytest.mark.parametrize("pagina", PAGINAS_DASHBOARD)
 def test_pagina_abre_sem_api(pagina: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("API_URL", "http://127.0.0.1:9")  # porta fechada: conexão recusada
     monkeypatch.delitem(sys.modules, "web.comum", raising=False)  # relê o API_URL

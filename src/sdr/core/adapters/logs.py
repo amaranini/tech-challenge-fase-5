@@ -13,6 +13,13 @@ class FiltroPII(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.msg, str):
             record.msg = mascarar_pii(record.msg)
+        # Traceback (logger.exception) também: a mensagem da exceção pode trazer o dado.
+        if record.exc_info and not record.exc_text:
+            record.exc_text = logging.Formatter().formatException(record.exc_info)
+        if record.exc_text:
+            record.exc_text = mascarar_pii(record.exc_text)
+        if record.stack_info:
+            record.stack_info = mascarar_pii(record.stack_info)
         if isinstance(record.args, tuple):
             record.args = tuple(_mascarar(a) for a in record.args)
         elif isinstance(record.args, dict):

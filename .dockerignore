@@ -9,3 +9,5 @@
 tests
 docs
 .cache
+node_modules
+.railway

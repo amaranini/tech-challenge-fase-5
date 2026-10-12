@@ -7,6 +7,16 @@ from sdr.core.domain.agente import Persona
 PASTA_PROMPTS = Path(__file__).resolve().parent / "prompts"
 VERSAO_ATUAL = "lia_v2"
 PADRAO_CODIGO_IMOVEL = r"\bIMV-\d{3}\b"
+# (nome, regex sobre texto minúsculo e sem acento)
+PROMESSAS_IMOBILIARIAS: tuple[tuple[str, str], ...] = (
+    (
+        "aceite_do_proprietario",
+        r"\b(proprietario|dono)\b.{0,15}\b(aceita|topa|vai aceitar)\b.{0,15}"
+        r"\b(proposta|oferta|contraproposta|esse valor|o valor|\d)",
+    ),
+    ("financiamento_aprovado", r"\bfinanciamento\b.{0,25}\b(aprovado|garantido|sai com certeza)\b"),
+    ("isencao_itbi", r"\b(sem|isento de|nao paga) itbi\b"),
+)
 
 
 def carregar_prompt(caminho_relativo: str) -> str:
@@ -27,9 +37,14 @@ def carregar_persona(versao: str = VERSAO_ATUAL) -> Persona:
         versao_prompt=versao,
         prompt_sistema=caminho.read_text(encoding="utf-8").strip(),
         padrao_codigo_item=PADRAO_CODIGO_IMOVEL,
+        # Resposta segura (saída reprovada duas vezes): honesta, sem prometer retorno.
         mensagem_fallback=(
-            "Deixa eu conferir as opções certinho no sistema e já te mando, tá bom?"
+            "Prefiro não te passar nada que eu não tenha certeza 🙂 Valores, condições e "
+            "negociação quem confirma é o corretor. Me conta o que mais importa para você "
+            "no imóvel que eu busco opções na nossa base?"
         ),
+        # Promessas típicas do segmento, além das genéricas do core (ADR 015).
+        padroes_promessa=PROMESSAS_IMOBILIARIAS,
         aviso_midia=(
             "Recebi seu anexo, mas por enquanto eu só consigo ler mensagens de texto 😊 "
             "Pode me escrever o que precisa? Assim eu já te ajudo a encontrar o imóvel."

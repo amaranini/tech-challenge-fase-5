@@ -1,48 +1,41 @@
-"""Cliente da API no ar (docker compose) para testes com LLM real (e2e e cenários `llm`).
+"""API no ar para os testes com LLM real (e2e e cenários `llm`): fina camada de pytest
+sobre o cliente da avaliação (evals/cliente.py) — pula se a API ou o LLM estiverem fora.
 
 O POST só registra a mensagem (202); a resposta chega depois do debounce, por isso cada
 fala espera o turno terminar (polling) antes da próxima.
 """
 
 import os
-import time
 from typing import Any
 
-import httpx
 import pytest
 
-API_URL = os.environ.get("API_URL", "http://localhost:8000")
+from evals.cliente import ApiViva, TurnoFalhouError, chave_admin
+
+API = ApiViva()
+API_URL = API.url
+# O dashboard, quando testado aqui (AppTest), lê API_KEY do ambiente.
+if chave := chave_admin():
+    os.environ.setdefault("API_KEY", chave)
 
 
 def exigir_api() -> None:
     """Pula o teste se a API não estiver no ar."""
-    try:
-        httpx.get(f"{API_URL}/health", timeout=5).raise_for_status()
-    except httpx.HTTPError as erro:
-        pytest.skip(f"API indisponível em {API_URL}: {erro}")
+    if not API.no_ar():
+        pytest.skip(f"API indisponível em {API_URL}")
 
 
 def postar(lead_id: str, *textos: str) -> None:
-    with httpx.Client(base_url=API_URL, timeout=30) as api:
-        for texto in textos:
-            resposta = api.post("/conversas/mensagens", json={"lead_id": lead_id, "texto": texto})
-            assert resposta.status_code == 202, resposta.text
-            print(f"\n[lead] {texto}")
+    API.postar(lead_id, *textos)
+    for texto in textos:
+        print(f"\n[lead] {texto}")
 
 
 def aguardar_resposta(lead_id: str, timeout: float = 120) -> dict[str, Any]:
-    """Polling até não haver turno pendente; devolve o histórico."""
-    limite = time.monotonic() + timeout
-    with httpx.Client(base_url=API_URL, timeout=30) as api:
-        while time.monotonic() < limite:
-            historico: dict[str, Any] = api.get(f"/conversas/{lead_id}/mensagens").json()
-            if not historico["processando"]:
-                ultima = historico["mensagens"][-1]
-                if ultima["status"] == "falha":
-                    pytest.skip("turno falhou (LLM indisponível?) — veja os logs da API")
-                return historico
-            time.sleep(1)
-    raise AssertionError(f"sem resposta em {timeout}s")
+    try:
+        return API.aguardar(lead_id, timeout)
+    except TurnoFalhouError:
+        pytest.skip("turno falhou (LLM indisponível?) — veja os logs da API")
 
 
 def enviar(lead_id: str, texto: str) -> dict[str, Any]:
@@ -56,72 +49,20 @@ def enviar(lead_id: str, texto: str) -> dict[str, Any]:
 
 
 def obter_lead(lead_id: str) -> dict[str, Any]:
-    resposta = httpx.get(f"{API_URL}/leads/{lead_id}", timeout=30)
-    resposta.raise_for_status()
-    corpo: dict[str, Any] = resposta.json()
-    return corpo
+    return API.lead(lead_id)
 
 
 def historico(lead_id: str) -> dict[str, Any]:
-    resposta = httpx.get(f"{API_URL}/conversas/{lead_id}/mensagens", timeout=30)
-    resposta.raise_for_status()
-    corpo: dict[str, Any] = resposta.json()
-    return corpo
+    return API.historico(lead_id)
 
 
 def aguardar_resumo(lead_id: str, gatilho: str | None, timeout: float = 120) -> dict[str, Any]:
-    """O resumo é gerado FORA do turno: espera a versão do gatilho esperado aparecer."""
-    limite = time.monotonic() + timeout
-    while time.monotonic() < limite:
-        resposta = httpx.get(f"{API_URL}/leads/{lead_id}/resumo", timeout=30)
-        if resposta.status_code == httpx.codes.OK:
-            corpo: dict[str, Any] = resposta.json()
-            if gatilho is None or corpo["gatilho"] == gatilho:
-                return corpo
-        time.sleep(2)
-    raise AssertionError(f"sem resumo ({gatilho}) para {lead_id} em {timeout}s")
+    return API.aguardar_resumo(lead_id, gatilho, timeout)
 
 
 def acao_da_equipe(lead_id: str, acao: dict[str, Any]) -> None:
-    """Passo da tela Fila: assumir, responder ou devolver o atendimento."""
-    with httpx.Client(base_url=API_URL, timeout=30) as api:
-        match acao["acao"]:
-            case "assumir":
-                r = api.post(
-                    f"/atendimentos/{lead_id}/assumir", json={"responsavel": acao["responsavel"]}
-                )
-            case "responder":
-                r = api.post(f"/atendimentos/{lead_id}/mensagens", json={"texto": acao["texto"]})
-            case "devolver":
-                r = api.post(f"/atendimentos/{lead_id}/devolver")
-            case "simular_inatividade":
-                antes = _assistente(api.get(f"/conversas/{lead_id}/mensagens").json())
-                r = api.post(f"/demo/leads/{lead_id}/simular-inatividade")
-                if acao.get("espera") == "recusa":
-                    assert r.status_code == httpx.codes.CONFLICT, r.text
-                    print("\n[equipe] simular inatividade → recusado (opt-out)")
-                    return
-                assert r.is_success, r.text
-                print("\n[demo]   simular inatividade")
-                print(f"[lia]  (follow-up) {_aguardar_followup(api, lead_id, antes)}")
-                return
-            case outra:
-                raise ValueError(f"ação desconhecida: {outra}")
-    assert r.is_success, r.text
+    """Passo da tela Fila (assumir, responder, devolver) ou da demo (inatividade)."""
+    followup = API.acao_da_equipe(lead_id, acao)
     print(f"\n[equipe] {acao['acao']} {acao.get('texto', acao.get('responsavel', ''))}")
-
-
-def _assistente(historico: dict[str, Any]) -> int:
-    return sum(1 for m in historico["mensagens"] if m["papel"] == "assistente")
-
-
-def _aguardar_followup(api: httpx.Client, lead_id: str, antes: int, timeout: float = 120) -> str:
-    """O worker envia o follow-up na próxima varredura: espera a mensagem nova aparecer."""
-    limite = time.monotonic() + timeout
-    while time.monotonic() < limite:
-        historico = api.get(f"/conversas/{lead_id}/mensagens").json()
-        if _assistente(historico) > antes:
-            texto: str = historico["mensagens"][-1]["texto"]
-            return texto
-        time.sleep(2)
-    raise AssertionError(f"o worker não enviou o follow-up em {timeout}s (worker no ar?)")
+    if followup:
+        print(f"[lia]  (follow-up) {followup}")

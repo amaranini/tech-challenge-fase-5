@@ -62,6 +62,7 @@ class FollowUpPendente(BaseModel):
 
 class LeadDetalhe(BaseModel):
     lead_id: str
+    id: UUID = Field(description="Id interno (session_id no Langfuse)")
     canal: Canal
     nome: str | None
     criado_em: datetime
@@ -95,6 +96,7 @@ class LeadDetalhe(BaseModel):
         lead, q = estado.lead, estado.lead.qualificacao
         return cls(
             lead_id=id_publico(lead),
+            id=lead.id,
             canal=lead.canal,
             nome=lead.nome,
             criado_em=lead.criado_em,

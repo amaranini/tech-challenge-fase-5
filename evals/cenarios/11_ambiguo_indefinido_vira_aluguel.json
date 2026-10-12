@@ -1,0 +1,40 @@
+{
+  "nome": "ambiguo_indefinido_vira_aluguel",
+  "descricao": "O lead começa vago (saudação e 'pensando em mudar'): a intenção fica indefinida e a Lia descobre o objetivo sem chutar; quando ele diz que quer alugar, a intenção é identificada uma única vez.",
+  "falas": [
+    {
+      "texto": "oi, tudo bem?",
+      "esperado": {
+        "intencao": null
+      }
+    },
+    {
+      "texto": "tô pensando em mudar de casa esse ano",
+      "esperado": {
+        "intencao": null
+      }
+    },
+    {
+      "texto": "quero alugar, comprar agora não dá",
+      "esperado": {
+        "intencao": "aluguel"
+      }
+    },
+    "um apê de 1 quarto perto do metrô na zona oeste"
+  ],
+  "esperado": {
+    "intencao": "aluguel",
+    "ficha": {
+      "regiao": {
+        "contem": "oeste"
+      },
+      "quartos": 1
+    },
+    "contagem_eventos": {
+      "IntencaoIdentificada": 1
+    },
+    "eventos_ausentes": [
+      "IntencaoAlterada"
+    ]
+  }
+}

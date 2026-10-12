@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      # Testes de integração usam o banco sdr_test (recriado e migrado por sessão).
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: sdr
+          POSTGRES_PASSWORD: sdr
+          POSTGRES_DB: sdr
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U sdr"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://sdr:sdr@localhost:5433/sdr
+      EMBEDDING_CACHE_DIR: .cache/fastembed
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Instalar dependências
+        run: uv sync --frozen
+      - name: Ruff (lint + formato)
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: mypy
+        run: uv run mypy
+      - name: import-linter (core × vertical, hexágono)
+        run: uv run lint-imports
+      - name: Migrations batem com os modelos
+        run: uv run alembic upgrade head && uv run alembic check
+      - name: pytest (sem @llm e sem @e2e)
+        run: uv run pytest -q

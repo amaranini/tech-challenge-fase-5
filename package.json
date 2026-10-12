@@ -1,0 +1,8 @@
+{
+  "name": "sdr-lia-infra",
+  "private": true,
+  "description": "Só a ferramenta de infraestrutura da Railway (.railway/railway.ts); a aplicação é Python (uv).",
+  "devDependencies": {
+    "railway": "^3.14.0"
+  }
+}

@@ -20,6 +20,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from sdr.core.adapters.inbound.http.dependencias import obter_dependencias
+from sdr.core.adapters.inbound.http.protecao import excedeu, ip_cliente, obter_protecao
 from sdr.core.adapters.inbound.http.whatsapp_comum import normalizar_e164, tipo_midia
 from sdr.core.application.dto.mensagem_recebida import MensagemRecebida, MidiaRecebida
 from sdr.core.application.use_cases.entregar_mensagem import AtualizarStatusEntrega
@@ -135,6 +136,11 @@ async def verificar(
 async def receber(
     request: Request, webhook: Annotated[WebhookMeta, Depends(obter_webhook)]
 ) -> Response:
+    protecao = obter_protecao(request)
+    if await excedeu(
+        request, f"ip-webhook:{ip_cliente(request)}", protecao.limite_ip_webhook_por_minuto
+    ):
+        return Response(status_code=200)  # 4xx/5xx faria a Meta reenviar
     corpo = await request.body()
     if webhook.validar_assinatura and not assinatura_meta_valida(
         corpo, webhook.app_secret, request.headers.get("X-Hub-Signature-256")
@@ -147,6 +153,9 @@ async def receber(
         raise HTTPException(400, "JSON inválido") from None
     for valor in _valores(payload):
         for mensagem in mensagens_da_meta(valor):
+            chave = f"remetente:whatsapp:{mensagem.remetente_id}"
+            if await excedeu(request, chave, protecao.limite_remetente_por_minuto):
+                continue
             try:
                 await webhook.receber_mensagem.executar(mensagem)
             except MensagemDuplicadaError as duplicada:

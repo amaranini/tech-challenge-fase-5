@@ -4,6 +4,8 @@ Formato de um roteiro:
     {
       "nome": "...", "descricao": "...",
       "falas": ["fala 1 do lead", "fala 2", ...],      # cada uma espera a resposta da Lia
+      # mensagens picadas (enviadas em sequência; a Lia responde UMA vez ao conjunto):
+      #   {"picadas": ["oi", "quero alugar", "no centro"], "esperado": {...}}
       # uma fala também pode conferir o estado logo depois dela:
       #   {"texto": "pode ser quinta?", "esperado": {"eventos_ausentes": ["AgendamentoCriado"]}}
       # ... e a resposta: {"sem_resposta": true} (IA em silêncio) ou
@@ -26,6 +28,8 @@ Formato de um roteiro:
         "eventos": [{"tipo": "IntencaoAlterada", "payload": {"de": "aluguel"}}],
         "eventos_ausentes": ["IntencaoAlterada"],
         "contagem_eventos": {"AgendamentoCriado": 1},       # quantas vezes ocorreu
+        "ficha_exata": true,         # avaliação: campo extraído a mais conta contra a precisão
+        "injecao": true,             # avaliação: cenário de ataque (mede a contenção)
         "resumo": {                                         # resumo de handoff (fora do turno)
           "gatilho": "AgendamentoCriado",
           "secoes": {"agendamento": {"preenchido": true}}   # conteúdo de cada seção
@@ -52,8 +56,7 @@ FUSO = ZoneInfo("America/Sao_Paulo")
 DIAS = ("segunda", "terca", "quarta", "quinta", "sexta", "sabado", "domingo")
 MEIO_DIA, SEIS_DA_TARDE = 12, 18
 
-RAIZ = Path(__file__).resolve().parents[2]
-PASTA_CENARIOS = RAIZ / "evals" / "cenarios"
+PASTA_CENARIOS = Path(__file__).resolve().parent / "cenarios"
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,11 @@ class Fala:
     texto: str
     esperado: dict[str, Any] | None = None  # conferido logo após a resposta a esta fala
     acao: dict[str, Any] | None = None  # passo da equipe (assumir/responder/devolver)
+    picadas: tuple[str, ...] = ()  # várias mensagens seguidas, sem esperar a Lia
+
+    @property
+    def mensagens(self) -> tuple[str, ...]:
+        return self.picadas or (self.texto,)
 
 
 @dataclass(frozen=True)
@@ -77,6 +85,9 @@ def _fala(bruta: str | dict[str, Any]) -> Fala:
         return Fala(bruta)
     if "acao" in bruta:
         return Fala("", acao=dict(bruta))
+    if "picadas" in bruta:
+        picadas = tuple(bruta["picadas"])
+        return Fala(" / ".join(picadas), bruta.get("esperado"), picadas=picadas)
     return Fala(bruta["texto"], bruta.get("esperado"))
 
 

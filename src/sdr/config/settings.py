@@ -1,16 +1,30 @@
 from functools import lru_cache
 from typing import Any
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    # env_ignore_empty: "CHAVE=" vazio no .env vale como não definida (usa o padrão) — o
+    # .env.example copiado sem editar precisa subir (WHATSAPP_LIMITE_CARACTERES= quebrava).
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore", env_ignore_empty=True
+    )
 
     ambiente: str = "local"
     log_level: str = "INFO"
     database_url: str = "postgresql+psycopg://sdr:sdr@localhost:5433/sdr"
+
+    @field_validator("database_url")
+    @classmethod
+    def _driver_psycopg(cls, valor: str) -> str:
+        """Plataformas (Railway, Render) entregam `postgres://` ou `postgresql://`: o
+        SQLAlchemy async precisa do driver explícito."""
+        for prefixo in ("postgres://", "postgresql://"):
+            if valor.startswith(prefixo):
+                return "postgresql+psycopg://" + valor[len(prefixo) :]
+        return valor
 
     # Vertical de negócio ativa (registro em sdr.bootstrap.VERTICAIS)
     vertical: str = "imobiliario"
@@ -96,6 +110,27 @@ class Settings(BaseSettings):
         default="https://cloud.langfuse.com",
         validation_alias=AliasChoices("LANGFUSE_BASE_URL", "LANGFUSE_HOST"),
     )
+
+    # Segurança (ADR 015)
+    mensagem_max_caracteres: int = 2000  # entrada do lead; web acima disso = 422, WhatsApp trunca
+    # Chaves aceitas no header X-API-Key das rotas administrativas/de atendimento (vírgula).
+    # Vazio: em local, rotas abertas (com aviso no log); em produção a API não sobe.
+    admin_api_keys: SecretStr | None = None
+    # Chaves somente leitura (GET; nunca LGPD) — ex.: o usuário de avaliação do dashboard.
+    leitura_api_keys: SecretStr | None = None
+    confiar_proxy: bool = False  # True atrás de proxy (Railway/Render): IP do X-Forwarded-For
+    limite_remetente_por_minuto: int = 20  # mensagens por remetente (chat web e webhook)
+    limite_ip_por_minuto: int = 60  # requisições por IP no chat público
+    limite_ip_webhook_por_minuto: int = 600  # no webhook o IP é do provedor: só contra flood
+
+    # Qualidade da IA: preço do LLM em US$ por 1M tokens [entrada, saída] (prefixo do modelo)
+    custo_llm_por_milhao: dict[str, list[float]] = {
+        "gpt-4.1-mini": [0.40, 1.60],
+        "gpt-4.1-nano": [0.10, 0.40],
+        "gpt-4.1": [2.00, 8.00],
+        "gpt-4o-mini": [0.15, 0.60],
+        "gpt-4o": [2.50, 10.00],
+    }
 
     # CRM mock (Postgres + log JSON Lines). Produção: HubSpot ou outro CRM.
     crm_mock_log: str | None = "var/crm_mock.jsonl"

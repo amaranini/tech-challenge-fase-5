@@ -388,3 +388,27 @@ async def test_handoff_confirmado_gera_resumo_com_as_mensagens_da_fila() -> None
     anexo = resumo.secao("mensagens_na_espera")
     assert anexo is not None
     assert anexo.conteudo == ["oi? alguém aí?"]  # só o que veio depois de entrar na fila
+
+
+async def test_lead_anonimizado_nao_ganha_resumo_nem_crm() -> None:
+    c = Cenario({"perfil": "Quer treinar à noite."})
+    c.leads.leads[c.lead.id] = replace(c.lead, remetente_id="anon-123456789abc")
+    await c.gerar.ao_publicar([c.evento(TipoEvento.LEAD_QUALIFICADO)])
+    assert await c.resumos.ultimo(c.lead.id) is None
+    assert c.crm.registros == {}
+
+
+async def test_anonimizado_durante_a_redacao_descarta_o_resumo() -> None:
+    """LGPD: a redação leva segundos; antes, o resumo "voltava" depois da anonimização."""
+    c = Cenario({"perfil": "Quer treinar à noite."})
+    redigir = c.redator.redigir
+
+    async def redigir_e_anonimizar(*args, **kwargs):  # type: ignore[no-untyped-def]
+        c.leads.leads[c.lead.id] = replace(c.lead, remetente_id="anon-123456789abc")
+        return await redigir(*args, **kwargs)
+
+    c.redator.redigir = redigir_e_anonimizar  # type: ignore[method-assign]
+    await c.gerar.ao_publicar([c.evento(TipoEvento.LEAD_QUALIFICADO)])
+    assert await c.resumos.ultimo(c.lead.id) is None
+    assert c.crm.registros == {}
+    assert not [e for e in c.eventos.eventos if e.tipo is TipoEvento.RESUMO_GERADO]

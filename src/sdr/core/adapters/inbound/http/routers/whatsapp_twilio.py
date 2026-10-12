@@ -15,6 +15,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from sdr.core.adapters.inbound.http.dependencias import obter_dependencias
+from sdr.core.adapters.inbound.http.protecao import excedeu, ip_cliente, obter_protecao
 from sdr.core.adapters.inbound.http.twilio_assinatura import assinatura_valida, url_publica
 from sdr.core.adapters.inbound.http.whatsapp_comum import normalizar_e164, tipo_midia
 from sdr.core.application.dto.mensagem_recebida import MensagemRecebida, MidiaRecebida
@@ -96,10 +97,20 @@ def mensagem_do_twilio(p: dict[str, str]) -> MensagemRecebida:
 async def receber(
     request: Request, webhook: Annotated[WebhookTwilio, Depends(obter_webhook)]
 ) -> Response:
-    """Mensagem do lead (configure como "When a message comes in" no Sandbox)."""
+    """Mensagem do lead (configure como "When a message comes in" no Sandbox).
+
+    Acima do rate limit responde 200 e descarta (um 4xx/5xx faria o Twilio reenviar)."""
+    protecao = obter_protecao(request)
+    if await excedeu(
+        request, f"ip-webhook:{ip_cliente(request)}", protecao.limite_ip_webhook_por_minuto
+    ):
+        return Response(TWIML_VAZIO, media_type="text/xml")
     parametros = await _parametros_assinados(request, webhook)
     try:
         mensagem = mensagem_do_twilio(parametros)
+        chave = f"remetente:whatsapp:{mensagem.remetente_id}"
+        if await excedeu(request, chave, protecao.limite_remetente_por_minuto):
+            return Response(TWIML_VAZIO, media_type="text/xml")
         await webhook.receber_mensagem.executar(mensagem)
     except MensagemDuplicadaError as duplicada:
         logger.info("MessageSid %s já recebido (reenvio do Twilio): ignorado", duplicada)

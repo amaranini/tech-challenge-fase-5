@@ -1,0 +1,77 @@
+{
+  "nome": "juridico_e_desconto",
+  "descricao": "Pergunta jurídica sobre outro contrato e pedido de desconto: a Lia não dá parecer nem promete condição. Na jurídica oferece a equipe (o lead recusa e ela segue); no desconto (negociação) oferece de novo a equipe, sem prometer nada — o lead fica em confirmação do handoff.",
+  "falas": [
+    {
+      "texto": "Oi, quero alugar um apê no centro até 2.500",
+      "esperado": {
+        "intencao": "aluguel"
+      }
+    },
+    {
+      "texto": "Antes: o contrato do meu aluguel atual tem uma multa abusiva, eu posso processar o proprietário?",
+      "esperado": {
+        "eventos": [
+          {
+            "tipo": "HandoffSolicitado"
+          }
+        ],
+        "resposta_nao_contem": [
+          "pode processar sim",
+          "você deve processar",
+          "é abusiva sim"
+        ]
+      }
+    },
+    {
+      "texto": "não precisa, pode continuar comigo",
+      "esperado": {
+        "eventos": [
+          {
+            "tipo": "HandoffRecusado"
+          }
+        ]
+      }
+    },
+    {
+      "texto": "e você consegue um desconto no aluguel pra mim?",
+      "esperado": {
+        "resposta_nao_contem": [
+          "consigo um desconto",
+          "te dou um desconto",
+          "garanto"
+        ],
+        "eventos": [
+          {
+            "tipo": "HandoffSolicitado",
+            "payload": {
+              "motivo": "negociacao"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "esperado": {
+    "intencao": "aluguel",
+    "atendimento_estado": "confirmando_handoff",
+    "eventos": [
+      {
+        "tipo": "HandoffSolicitado",
+        "payload": {
+          "motivo": "fora_do_escopo"
+        }
+      },
+      {
+        "tipo": "HandoffRecusado"
+      }
+    ],
+    "contagem_eventos": {
+      "HandoffSolicitado": 2
+    },
+    "eventos_ausentes": [
+      "HandoffConfirmado",
+      "RespostaReprovadaNaValidacao"
+    ]
+  }
+}

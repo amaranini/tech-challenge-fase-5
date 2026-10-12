@@ -30,6 +30,7 @@ from web.comum import (
     mostrar_resumo,
     mostrar_score,
     periodo_selecionado,
+    protegido,
 )  # fmt: skip
 
 st.title("👥 Leads")
@@ -74,7 +75,9 @@ st.caption(f"{len(leads)} lead(s) criados no período · clique numa linha para 
 
 def _linha(lead: dict[str, Any]) -> dict[str, Any]:
     return {
-        "Lead": f"{lead['nome']} · {lead['lead_id']}" if lead["nome"] else lead["lead_id"],
+        "Lead": protegido(
+            f"{lead['nome']} · {lead['lead_id']}" if lead["nome"] else lead["lead_id"]
+        ),
         "Canal": CANAIS_ROTULO.get(lead["canal"], lead["canal"]),
         "Intenção": INTENCOES.get(lead["intencao"] or "", "❔ indefinida"),
         "Score": lead["score"],
@@ -113,7 +116,7 @@ if detalhe is None or historico is None:
     st.stop()
 
 st.divider()
-st.header(f"{CANAIS_ROTULO.get(detalhe['canal'], '')} {lead_id}")
+st.header(protegido(f"{CANAIS_ROTULO.get(detalhe['canal'], '')} {lead_id}"))
 traces = [m["trace_url"] for m in historico["mensagens"] if m.get("trace_url")]
 if traces:
     st.link_button("🔎 Último trace no Langfuse", traces[-1])

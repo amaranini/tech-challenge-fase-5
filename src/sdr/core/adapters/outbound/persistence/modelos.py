@@ -259,3 +259,17 @@ class FollowUpModel(Base):
         Index("ix_followups_fila", "status", "executar_em"),
         Index("ix_followups_lead", "lead_id", "status"),
     )
+
+
+# Resumo de cada rodada do eval offline (evals/runner.py), para a página Qualidade da IA.
+class AvaliacaoOfflineModel(Base):
+    __tablename__ = "avaliacoes_offline"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    executada_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    versao: Mapped[dict[str, Any]] = mapped_column(JSONB)  # persona, prompts, modelos
+    metricas: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    contexto: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
+    criada_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (Index("ix_avaliacoes_offline_executada_em", "executada_em"),)
