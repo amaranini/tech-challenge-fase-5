@@ -39,6 +39,10 @@ FORA_DA_LISTA_DE_TESTE = 131030  # destinatário fora da lista permitida (númer
 CELULAR_BR_SEM_NONO = re.compile(r"^55(\d{2})([6-9]\d{7})$")
 
 
+# Indicador de digitação: chamada curta, não pode segurar o turno.
+TIMEOUT_DIGITANDO = httpx.Timeout(5.0, connect=3.0)
+
+
 @dataclass(frozen=True)
 class TemplateMeta:
     """Template aprovado na Meta para um nome lógico (config da operação)."""
@@ -120,6 +124,26 @@ class CanalWhatsAppMeta:
         return ResultadoEnvio(
             (await self._postar(lead, {"type": "template", "template": template}),)
         )
+
+    async def indicar_digitando(self, lead: Lead, referencia: str) -> None:
+        """Marca a mensagem do lead como lida e mostra "digitando…" (some quando a resposta
+        sai ou em 25 s). Só é chamado quando a Lia vai responder (regra da Meta)."""
+        try:
+            resposta = await self._cliente.post(
+                self._url,
+                json={
+                    "messaging_product": "whatsapp",
+                    "status": "read",
+                    "message_id": referencia,
+                    "typing_indicator": {"type": "text"},
+                },
+                headers={"Authorization": f"Bearer {self._config.access_token}"},
+                timeout=TIMEOUT_DIGITANDO,
+            )
+        except httpx.HTTPError as erro:
+            raise FalhaEnvioError(f"Meta indisponível: {erro}") from erro
+        if resposta.is_error:
+            raise FalhaEnvioError(str(_RecusaMetaError.da_resposta(resposta)))
 
     async def _postar(self, lead: Lead, conteudo: Mapping[str, Any]) -> str:
         numero = destinatario(lead.remetente_id)

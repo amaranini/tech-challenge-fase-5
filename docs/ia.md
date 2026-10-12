@@ -127,6 +127,10 @@ mensagens separadas. Responder cada uma seria ruim e caro.
 - O `ProcessarTurno` pega o **advisory lock** do lead, agrega as pendentes e roda o grafo
   **uma vez**. Se chega mensagem nova antes do envio, descarta a resposta e reprocessa
   com tudo ([ADR 006](adr/006-processamento-assincrono-debounce.md)).
+- **"Digitando…" no WhatsApp:** quando o debounce termina e o turno começa, a última
+  mensagem do lote é marcada como lida e o lead vê os três pontinhos enquanto a Lia
+  pensa (Cloud API; some quando a resposta sai ou em 25 s). Com uma pessoa da equipe
+  atendendo, não aparece.
 - **Custo:** os 5 s entram na latência percebida, de propósito. O eval mediu ~9 s da
   última fala até a resposta, dos quais ~4 s são o grafo.
 

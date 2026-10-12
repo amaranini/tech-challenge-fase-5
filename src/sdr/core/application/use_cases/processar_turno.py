@@ -148,6 +148,9 @@ class ProcessarTurno:
                 texto=mascarar_cpf(_texto_do_lote(lote)),
             )
             rastro.entrada = entrada.texto  # as mensagens do lote, agregadas
+            if lead.atendimento_atual.estado is not EstadoAtendimento.ATENDIMENTO_HUMANO:
+                # O lead parou de digitar: a Lia "começa a digitar" (WhatsApp) enquanto pensa.
+                await self._entrega.indicar_digitando(lead, lote)
             itens: tuple[ItemCatalogo, ...] = ()
             invalidos: list[str] = []
             fallback = False

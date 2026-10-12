@@ -206,7 +206,7 @@ class GraphFalso:
         corpo = json.loads(request.content)
         self.pedidos.append(corpo)
         assert request.headers["Authorization"] == "Bearer tok"
-        if corpo["to"] in self._recusar:
+        if corpo.get("to") in self._recusar:
             return httpx.Response(
                 400,
                 json={
@@ -289,3 +289,17 @@ async def test_recusa_da_meta_vira_falha_de_envio() -> None:
     graph = GraphFalso(recusar={"5511987654321", "55119987654321"})
     with pytest.raises(FalhaEnvioError, match="131030"):
         await canal(graph).enviar_texto(LEAD, msg("oi"))
+
+
+async def test_digitando_marca_como_lida_e_mostra_o_indicador() -> None:
+    """Formato da documentação da Cloud API (typing indicators)."""
+    graph = GraphFalso()
+    await canal(graph).indicar_digitando(LEAD, "wamid.do-lead")
+    assert graph.pedidos == [
+        {
+            "messaging_product": "whatsapp",
+            "status": "read",
+            "message_id": "wamid.do-lead",
+            "typing_indicator": {"type": "text"},
+        }
+    ]

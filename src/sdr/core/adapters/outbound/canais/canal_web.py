@@ -20,6 +20,9 @@ class CanalWeb:
         logger.debug("Resposta %s disponível para o lead web %s", mensagem.id, lead.id)
         return ResultadoEnvio()
 
+    async def indicar_digitando(self, lead: Lead, referencia: str) -> None:
+        """Web: o front já mostra "digitando" pelo `processando` do histórico."""
+
     async def enviar_template(
         self,
         lead: Lead,
