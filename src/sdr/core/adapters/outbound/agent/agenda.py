@@ -5,8 +5,10 @@ oferecido, proposto ou executado vem de `ConduzirAgendamento`. O bloco abaixo le
 os horários REAIS já formatados, para ele citar sem inventar.
 """
 
+import re
 import unicodedata
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import date, datetime
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -45,6 +47,23 @@ def _inteiro(valor: object, minimo: int, maximo: int) -> int | None:
         return None
     inteiro = int(valor)
     return inteiro if minimo <= inteiro <= maximo else None
+
+
+# "a segunda opção", "o primeiro horário", "a última" — escolha pela POSIÇÃO na lista.
+ESCOLHA_POR_POSICAO = re.compile(
+    r"\b(?:primeir|segund|terceir|quart|quint|últim|ultim)[oa]s?\s+(?:opç|opc|horári|horari)"
+    r"|\b(?:opç|opc)\w*\s+(?:\d|um|uma|dois|duas|tr[eê]s)\b",
+    re.IGNORECASE,
+)
+
+
+def escolha_por_posicao(interpretacao: InterpretacaoAgenda, fala: str) -> InterpretacaoAgenda:
+    """Escolheu pela posição na lista: vale a opção numerada, e a preferência de horário que
+    o LLM às vezes junta ("segunda opção" → segunda-feira, visto com LLM real) é descartada
+    — senão o domínio trata a opção como incompatível com a "preferência" e a descarta."""
+    if interpretacao.opcao is None or not ESCOLHA_POR_POSICAO.search(fala):
+        return interpretacao
+    return replace(interpretacao, preferencia=PreferenciaHorario())
 
 
 def ler_interpretacao(dados: Mapping[str, object], tipo: TipoAgendamento) -> InterpretacaoAgenda:
@@ -267,11 +286,15 @@ class _Redacao:
                 "naturalidade."
             )
         if self.r.agendamento is not None:
-            linhas.append(
+            linhas += [
                 f"Já está agendado: {self.agendamento(self.r.agendamento)}. Responda ao lead; "
                 "mencione o agendamento só se for pertinente (ele pode pedir para remarcar ou "
-                "cancelar)."
-            )
+                "cancelar).",
+                "O próximo passo já foi dado: NÃO apresente itens do catálogo nem ofereça "
+                "marcar de novo. O que não estiver nos dados do agendamento (ex.: endereço "
+                'exato) quem confirma é a pessoa responsável. Se o lead encerrar ("não", '
+                '"obrigado", "ok"), despeça-se numa frase, SEM pergunta.',
+            ]
         return linhas
 
     @staticmethod

@@ -122,3 +122,8 @@ Foi a primeira troca real de adapter: core, templates lógicos, janela e Fila n�
   produção: a imobiliária usa o próprio número.
 - O app precisa estar inscrito na conta do WhatsApp Business (`POST /{WABA_ID}/subscribed_apps`)
   para receber mensagens reais; o botão "Testar" do painel funciona mesmo sem isso.
+- **Produção (aceite em 11/10):** número brasileiro próprio na conta do WhatsApp Business,
+  token permanente de usuário do sistema e app inscrito na conta desse número; túnel com
+  domínio fixo (ngrok) para a URL do webhook não mudar. Fluxo completo validado pelo
+  celular: conversa até o agendamento, mensagens picadas, handoff com resposta do corretor
+  pela Fila, cancelamento com confirmação e follow-up entregue.

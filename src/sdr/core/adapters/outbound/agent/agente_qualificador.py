@@ -43,6 +43,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from sdr.core.adapters.outbound.agent.agenda import (
     bloco_agenda,
+    escolha_por_posicao,
     ler_interpretacao,
     prompt_interpretacao,
     schema_interpretacao,
@@ -69,7 +70,13 @@ from sdr.core.application.use_cases.conduzir_agendamento import (
     EntradaAgenda,
     ResultadoAgenda,
 )
-from sdr.core.domain.agenda import NegociacaoAgenda, TipoAgendamento, TipoDecisao
+from sdr.core.domain.agenda import (
+    Agendamento,
+    NegociacaoAgenda,
+    TipoAgendamento,
+    TipoDecisao,
+    descrever_horario,
+)
 from sdr.core.domain.agente import (
     ChamadaFerramentaRegistrada,
     Persona,
@@ -167,6 +174,7 @@ class EstadoGrafo(TypedDict):
     # Agenda
     negociacao: NegociacaoAgenda
     agenda: ResultadoAgenda | None
+    agendamento_ativo: Agendamento | None  # já marcado (consultado uma vez por turno)
     interpretacao_agenda: dict[str, object]
     # Atendimento (IA × humano)
     atendimento: Atendimento
@@ -429,6 +437,9 @@ class AgenteQualificador:
             "no_resposta": "descoberta",
             "negociacao": entrada.lead.agenda,
             "agenda": None,
+            "agendamento_ativo": (
+                await self._agenda.agendamento_ativo(entrada.lead.id) if self._agenda else None
+            ),
             "interpretacao_agenda": {},
             "atendimento": entrada.lead.atendimento_atual,
             "sinal_humano": None,
@@ -772,7 +783,11 @@ class AgenteQualificador:
         # Pedido explícito de agendar abre a agenda mesmo antes de qualificar (ex.: o lead
         # aceitou "quer marcar um horário com a equipe?" depois de uma dúvida sem
         # resposta — antes disso o grafo voltava ao roteiro de perguntas e "se perdia").
-        quer = q.proxima_acao or em_curso or estado["quer_agendar"]
+        # Com algo já marcado, toda fala passa pela agenda: é ela que entende "cancelar" e
+        # "remarcar" (sempre com confirmação). No especialista, o LLM chegou a dizer
+        # "cancelei" sem cancelar nada (visto com LLM real).
+        ja_marcado = estado["agendamento_ativo"] is not None
+        quer = q.proxima_acao or em_curso or estado["quer_agendar"] or ja_marcado
         return "agenda" if quer else "especialista"
 
     async def _no_agenda(self, estado: EstadoGrafo) -> dict[str, object]:
@@ -799,7 +814,9 @@ class AgenteQualificador:
             schema_interpretacao(tipo),
             "interpretacao_agenda",
         )
-        interpretacao = ler_interpretacao(resposta.dados, tipo)
+        interpretacao = escolha_por_posicao(
+            ler_interpretacao(resposta.dados, tipo), estado["texto"]
+        )
         resultado = await conduzir.executar(
             EntradaAgenda(
                 lead_id=lead_id,
@@ -860,7 +877,7 @@ class AgenteQualificador:
             novas = self._contexto(
                 estado,
                 intencao.prompt_especialista,
-                self._bloco_qualificacao(estado, intencao),
+                self._bloco_qualificacao(estado, intencao, self._descrever_ativo(estado)),
             )
         return await self._chamar_agente(estado, novas, "especialista")
 
@@ -929,8 +946,23 @@ class AgenteQualificador:
             mensagens.append(MensagemLLM(PapelLLM.SISTEMA, estado["instrucao_adicional"]))
         return mensagens
 
+    def _descrever_ativo(self, estado: EstadoGrafo) -> str | None:
+        ativo = estado["agendamento_ativo"]
+        if ativo is None or self._agenda is None:
+            return None
+        tipo = self._agenda.tipo_para(estado["intencao_atual"])
+        rotulo = tipo.rotulo if tipo else ativo.tipo
+        modalidade = tipo.modalidades.get(ativo.modalidade, ativo.modalidade) if tipo else ""
+        hoje = self._agora().astimezone(self._agenda.fuso).date()
+        quando = descrever_horario(ativo.inicio, self._agenda.fuso, hoje)
+        itens = f" Itens da conversa: {', '.join(ativo.itens)}." if ativo.itens else ""
+        r = ativo.responsavel
+        return f"{rotulo}, {quando}, com {r.nome} ({r.titulo}), {modalidade}.{itens}"
+
     @staticmethod
-    def _bloco_qualificacao(estado: EstadoGrafo, intencao: IntencaoVertical) -> str:
+    def _bloco_qualificacao(
+        estado: EstadoGrafo, intencao: IntencaoVertical, ativo: str | None = None
+    ) -> str:
         q = estado["qualificacao"]
         faltantes = estado["campos_faltantes"]
         linhas = [
@@ -940,6 +972,20 @@ class AgenteQualificador:
         ]
         if q.score:
             linhas.append(f"Score: {q.score.pontos} ({q.score.classificacao.value})")
+        if ativo is not None:
+            # Já marcado: o objetivo da conversa foi cumprido. Sem isto o especialista voltava
+            # a buscar e oferecer itens a cada fala ("qual o endereço?", "não") — LLM real.
+            linhas += [
+                f"JÁ ESTÁ MARCADO: {ativo}",
+                "O próximo passo já foi dado. NÃO busque nem apresente itens do catálogo por "
+                "conta própria e NÃO ofereça marcar de novo. Responda SÓ ao que o lead pediu; "
+                "sobre o agendamento, use os dados acima (o que não estiver neles, como "
+                "endereço exato, quem confirma é a pessoa responsável). Se o lead encerrar "
+                '("não", "obrigado", "ok", "só isso"), despeça-se numa frase, SEM pergunta.',
+                "NUNCA diga que cancelou, remarcou ou marcou algo: isso só acontece pela agenda, "
+                "com a confirmação do lead.",
+            ]
+            return "\n".join(linhas)
         pode_sugerir = bool(intencao.campos_para_sugerir) and not campos_faltantes(
             q.ficha, intencao.campos_para_sugerir
         )
