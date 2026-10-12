@@ -42,3 +42,8 @@ class CanalMensagemPort(Protocol):
         do template lógico; `mensagem.texto` traz o texto renderizado (preview/histórico).
         Levanta TemplateIndisponivelError se o nome lógico não estiver mapeado."""
         ...
+
+    async def indicar_digitando(self, lead: Lead, referencia: str) -> None:
+        """ "Digitando…" no canal do lead enquanto o turno é processado (e marca como lida a
+        mensagem `referencia`, id do provedor). Canal sem esse recurso: não faz nada."""
+        ...

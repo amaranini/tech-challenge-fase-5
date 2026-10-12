@@ -13,7 +13,7 @@ registra o resultado de entrega.
 """
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -78,6 +78,21 @@ class EntregarMensagem:
         self._canais = canais
         self._relogio = relogio
         self.config = config or ConfigEntrega()
+
+    # ------------------------------------------------------------------ digitando
+    async def indicar_digitando(self, lead: Lead, lote: Sequence[Mensagem]) -> None:
+        """ "Digitando…" no canal do lead, referindo a última mensagem dele que tem id do
+        provedor (o WhatsApp exige). Cosmético: falha só vira log, nunca derruba o turno."""
+        referencia = next((m.id_externo for m in reversed(lote) if m.id_externo), None)
+        canal = self._canais.get(lead.canal)
+        if referencia is None or canal is None:
+            return
+        try:
+            await canal.indicar_digitando(lead, referencia)
+        except Exception:
+            logger.warning(
+                "Não foi possível indicar 'digitando' ao lead %s", lead.id, exc_info=True
+            )
 
     # ------------------------------------------------------------------ decisão
     async def fora_da_janela(self, conversa: Conversa) -> bool:

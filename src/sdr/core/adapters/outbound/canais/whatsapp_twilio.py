@@ -119,5 +119,8 @@ class CanalWhatsAppTwilio:
         logger.info("WhatsApp → %s: %s", mascarar_telefone(lead.remetente_id), sid)
         return sid
 
+    async def indicar_digitando(self, lead: Lead, referencia: str) -> None:
+        """A API de mensagens do Twilio não expõe o indicador de digitação do WhatsApp."""
+
     async def fechar(self) -> None:
         await self._cliente.aclose()

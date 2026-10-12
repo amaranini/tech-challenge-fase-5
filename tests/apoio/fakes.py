@@ -362,6 +362,8 @@ class CanalFake:
     def __init__(self, templates_mapeados: set[str] | None = None, falhar: bool = False) -> None:
         self.enviadas: list[tuple[Lead, Mensagem]] = []
         self.templates: list[tuple[Lead, str, dict[str, str]]] = []
+        self.digitando: list[tuple[Lead, str]] = []
+        self.falhar_digitando = False
         self._mapeados = templates_mapeados
         self._falhar = falhar
         self._seq = 0
@@ -375,6 +377,11 @@ class CanalFake:
             raise FalhaEnvioError("provedor fora do ar")
         self.enviadas.append((lead, mensagem))
         return ResultadoEnvio((self._sid(),))
+
+    async def indicar_digitando(self, lead: Lead, referencia: str) -> None:
+        if self.falhar_digitando:
+            raise FalhaEnvioError("indicador fora do ar")
+        self.digitando.append((lead, referencia))
 
     async def enviar_template(
         self,

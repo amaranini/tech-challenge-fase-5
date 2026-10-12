@@ -227,6 +227,8 @@ sequenceDiagram
     Note over AG: 5 s sem mensagem nova
     AG->>PT: executar(lead)
     PT->>DB: advisory lock do lead · pendentes agregadas (CPF mascarado)
+    PT->>M: "digitando…" + marca como lida (sem humano atendendo · falha só vira log)
+    M->>L: ✓✓ azul e os três pontinhos
     PT->>G: responder(texto do lote, histórico)
     G->>LLM: roteador (intenção, injeção, fora do domínio, humano, agenda, opt-out)
     G->>LLM: extração (ficha da intenção) → merge e score no domínio
