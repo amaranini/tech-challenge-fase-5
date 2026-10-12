@@ -239,3 +239,48 @@ def atualizar_analise(relatorio: Path = PASTA / "relatorio.md") -> None:
 if __name__ == "__main__":
     atualizar_analise()
     print("Análise atualizada em evals/relatorio.md")
+
+
+def metricas_resumidas(rs: Sequence["ResultadoCenario"]) -> dict[str, Any]:
+    """Números principais da rodada, para gravar na API (card do eval offline no dashboard)."""
+    executados = [r for r in rs if r.pulado is None]
+    intencao = metricas.Contagem()
+    extracao = metricas.Extracao()
+    for r in executados:
+        intencao = intencao.somar(r.intencao)
+        extracao = extracao.somar(r.extracao)
+    turnos = [t for r in executados for t in r.turnos if t.resposta is not None]
+    itens = [a for t in turnos for a in t.ancoragem]
+    avaliados = [a for a in itens if a.adere is not None]
+    latencia = metricas.distribuicao([t.latencia_s for t in turnos])
+    comportamentos: dict[str, str] = {}
+    for nome in ROTULOS_COMPORTAMENTO:
+        valores = [
+            r.comportamentos[nome] for r in executados if r.comportamentos.get(nome) is not None
+        ]
+        if valores:
+            comportamentos[nome] = f"{sum(bool(v) for v in valores)}/{len(valores)}"
+    julgados = [r.juiz for r in executados if r.juiz is not None]
+    custos = [r.custo_usd for r in executados if r.turnos]
+    return {
+        "cenarios_aprovados": sum(r.ok for r in executados),
+        "cenarios_executados": len(executados),
+        "cenarios_pulados": len(rs) - len(executados),
+        "falharam": [r.nome for r in executados if not r.ok],
+        "acuracia_intencao": intencao.taxa,
+        "extracao_precisao": extracao.precisao,
+        "extracao_cobertura": extracao.cobertura,
+        "itens_existem": _taxa(a.existe for a in itens),
+        "itens_aderem": _taxa(bool(a.adere) for a in avaliados),
+        "comportamentos": comportamentos,
+        "respostas_com_duas_perguntas": _taxa(
+            t.resposta.count("?") > 1 for t in turnos if t.resposta
+        ),
+        "juiz": {c: sum(j.notas[c] for j in julgados) / len(julgados) for c in CRITERIOS}
+        if julgados
+        else {},
+        "juiz_media": sum(j.media for j in julgados) / len(julgados) if julgados else None,
+        "latencia_p50_s": latencia.mediana,
+        "latencia_p95_s": latencia.p95,
+        "custo_por_conversa_usd": _media(custos),
+    }

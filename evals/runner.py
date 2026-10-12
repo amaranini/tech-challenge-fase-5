@@ -244,6 +244,27 @@ class Runner:
             logger.warning("não foi possível enviar scores ao Langfuse", exc_info=True)
 
 
+def _registrar_na_api(
+    api: ApiViva, resultados: list[ResultadoCenario], contexto: dict[str, Any], inicio: datetime
+) -> None:
+    """Grava o resumo da rodada na API: o card "eval offline" da página Qualidade da IA lê
+    dali (vale também contra a nuvem). Rodadas parciais (-k) não são registradas."""
+    from evals.relatorio import metricas_resumidas  # noqa: PLC0415
+
+    versao = api.versao_agente()
+    corpo = {
+        "executada_em": inicio.isoformat(),
+        "versao": versao or {},
+        "metricas": metricas_resumidas(resultados),
+        "contexto": {k: v for k, v in contexto.items() if k != "inicio"}
+        | {"relatorio": "evals/relatorio.md", "cenarios": len(resultados)},
+    }
+    if api.registrar_avaliacao(corpo):
+        print("Resumo gravado na API (página Qualidade da IA).")
+    else:
+        print("AVISO: a API não aceitou o resumo (versão antiga sem /qualidade?).")
+
+
 def _langfuse_no_env() -> bool:
     from sdr.config.settings import obter_settings  # noqa: PLC0415
 
@@ -278,6 +299,9 @@ def main() -> None:
     parser.add_argument("--sem-juiz", action="store_true", help="não chama o LLM-as-judge")
     parser.add_argument(
         "--manter", action="store_true", help="não anonimiza os leads ao fim (libera a agenda)"
+    )
+    parser.add_argument(
+        "--nao-registrar", action="store_true", help="não grava o resumo na API (dashboard)"
     )
     parser.add_argument("--saida", default=str(PASTA / "relatorio.md"))
     parser.add_argument("--json", default=str(PASTA / "resultados.json"))
@@ -322,6 +346,8 @@ def main() -> None:
     )
     escrever_relatorio(Path(args.saida), resultados, contexto)
     print(f"\nRelatório: {args.saida}")
+    if not args.nao_registrar and not args.filtro:
+        _registrar_na_api(api, resultados, contexto, inicio)
 
 
 if __name__ == "__main__":

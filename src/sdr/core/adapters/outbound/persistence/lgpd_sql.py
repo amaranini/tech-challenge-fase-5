@@ -24,7 +24,7 @@ TEXTO_ANONIMIZADO = "[anonimizado]"
 # de template com o nome do lead); o resto (modelo, tokens, roteamento, trace) fica.
 METADADOS_PESSOAIS = ("midias", "texto_lead", "envio")
 # Valores nos payloads de evento (campos da ficha, fala do opt-out...): o TIPO fica.
-PAYLOAD_PESSOAL = ("valor", "de", "para", "fala", "nome", "texto")
+PAYLOAD_PESSOAL = ("valor", "de", "para", "fala", "nome", "texto", "comentario")
 
 
 def _json(valor: object) -> object:

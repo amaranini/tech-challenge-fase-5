@@ -77,7 +77,9 @@ src/sdr/
                            seguranca.py (heurística de injeção, promessas indevidas)
     application/
       consultas/           read models do dashboard (painel.py: Periodo, funil por coorte,
-                           ConsultasPainelPort, ConsultarPainel) — só leitura, ADR 014
+                           ConsultasPainelPort, ConsultarPainel) — só leitura, ADR 014;
+                           qualidade.py (métricas online por versão do agente, eval offline,
+                           custo por modelo; RegistrarAvaliacaoOffline) — ADR 017
       ports/               Protocols: CatalogoPort, EmbeddingPort, VerificadorSaudePort, LLMPort
                            (texto + saída estruturada), AgenteConversacionalPort, Ferramenta,
                            LeadRepository, ConversaRepository, LeadEventoRepository,
@@ -103,7 +105,8 @@ src/sdr/
                            ExecutarFollowUps — chamado pelo worker), entregar_mensagem.py
                            (EntregarMensagem: janela de 24h → texto livre × template, falha ⇒
                            evento; AtualizarStatusEntrega), documentar_templates.py,
-                           lgpd.py (ExportarDadosLead, AnonimizarLead)
+                           lgpd.py (ExportarDadosLead, AnonimizarLead), avaliar_resumo.py
+                           ("útil / não útil" do resumo → ResumoAvaliado)
       dto/                 MensagemRecebida normalizada e agnóstica de canal
                            (canal, remetente_id, texto, timestamp, metadados, id_externo,
                            nome_remetente, midias)
@@ -195,7 +198,8 @@ src/sdr/
 web/                       Streamlit multipágina — SOMENTE via API HTTP: app.py (login +
                            navegação), autenticacao.py (login por env, PBKDF2),
                            comum.py (API, vocabulário, componentes, gráficos), paginas/
-                           (visao_geral, leads + detalhe, fila, agenda, followups, chat);
+                           (visao_geral, leads + detalhe, fila, agenda, followups, qualidade,
+                           chat);
                            tema em .streamlit/config.toml
 scripts/seed_demo.py       ~40 leads sintéticos (leads.demo) — make seed-demo / limpar-demo
 docker/                    api.Dockerfile (api + worker) e web.Dockerfile, multi-stage: modelo de
@@ -297,6 +301,13 @@ docs/arquitetura.md  diagramas Mermaid · docs/adr/  decisões de arquitetura
   - Um rastro por turno, follow-up enviado e resumo redigido; etapa por nó do grafo;
     geração por chamada ao LLM (bootstrap embrulha o LLM de cada nó). `trace` vai na
     mensagem (id + url). session = lead_id, user = hash; PII mascarada antes de sair.
+- **Qualidade da IA (ADR 017)**
+  - Versão do agente = persona · modelo · prompts do core, gravada em cada resposta;
+    conversa conta na versão da 1ª resposta. Mudou prompt/modelo ⇒ rode `make eval`.
+  - Métricas online só em `ConsultasQualidadeSql` (read model); custo = tokens × preço
+    da config. O runner grava cada rodada completa em `POST /qualidade/offline`.
+  - Resumo de handoff nunca é gravado para lead anonimizado (checa antes e depois da
+    redação — corrida com a LGPD).
 - **Dashboard (ADR 014)**
   - Consultas (read models) em `core/application/consultas/`, separadas dos comandos;
     agregação em SQL (`ConsultasPainelSql`) sobre lead_eventos + tabelas existentes.
@@ -377,7 +388,10 @@ Nova fatia na vertical (ex.: `qualificacao/`) ⇒ adicioná-la aos contratos 4 e
   `MENSAGEM_MAX_CARACTERES` (2000), `LIMITE_*_POR_MINUTO`, `CONFIAR_PROXY`; `AMBIENTE=producao`
   liga o fail-closed. LGPD: `GET /lgpd/leads/{id}/exportacao`, `POST .../anonimizacao`.
   Testes contra a API no ar (`tests/apoio/api_viva.py`) mandam a chave do `.env`.
-- Dashboard: http://localhost:8501 (login; Visão geral, Leads, Fila, Agenda, Follow-ups, Chat);
+- Qualidade da IA: `GET /qualidade/online` (`abandono_horas`, `apenas_reais`), `/qualidade/offline`,
+  `/qualidade/versao`, `POST /leads/{id}/resumo/avaliacao`; preços em `CUSTO_LLM_POR_MILHAO`.
+- Dashboard: http://localhost:8501 (login; Visão geral, Leads, Fila, Agenda, Follow-ups,
+  Qualidade da IA, Chat);
   `make seed-demo` (precisa do `make seed`) e `make limpar-demo`; `GET /painel/*`.
 - `make busca q="apê 2 quartos zona sul até 800 mil perto do metrô"` — testa POST /imoveis/busca.
 - Debounce: `DEBOUNCE_SEGUNDOS` (5) e `DEBOUNCE_MAX_SEGUNDOS` (20).

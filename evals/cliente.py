@@ -122,6 +122,13 @@ class ApiViva:
         corpo: dict[str, Any] = r.json()
         return corpo
 
+    def versao_agente(self) -> dict[str, Any] | None:
+        r = self._http.get("/qualidade/versao")
+        return r.json() if r.is_success else None
+
+    def registrar_avaliacao(self, corpo: dict[str, Any]) -> bool:
+        return self._http.post("/qualidade/offline", json=corpo).is_success
+
     def anonimizar(self, lead_id: str) -> bool:
         """LGPD: anonimiza o lead e cancela agendamento/follow-ups (libera a agenda mock)."""
         r = self._http.post(f"/lgpd/leads/{lead_id}/anonimizacao")

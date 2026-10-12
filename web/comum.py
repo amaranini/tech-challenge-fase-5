@@ -198,6 +198,18 @@ EVENTOS_POS_QUALIFICACAO: dict[str, Any] = {
         f"📄 **template indisponível**, mensagem não enviada ({p.get('motivo')})"
     ),
     "MensagemNaoEntregue": lambda p: f"⚠️ **mensagem não entregue** ({p.get('motivo')})",
+    "TentativaInjecaoDetectada": lambda p: (
+        f"🛡️ **tentativa de injeção** contida ({', '.join(p.get('padroes') or []) or 'LLM'})"
+    ),
+    "RespostaReprovadaNaValidacao": lambda p: (
+        "🧯 resposta reprovada na validação"
+        + (" — enviada a resposta segura" if p.get("fallback") else " — corrigida")
+    ),
+    "ResumoAvaliado": lambda p: (
+        f"{'👍' if p.get('util') else '👎'} resumo v{p.get('versao')} avaliado"
+        + (f" por {p.get('responsavel')}" if p.get("responsavel") else "")
+    ),
+    "DadosLeadAnonimizados": lambda p: "🔒 **dados anonimizados** (LGPD)",
 }
 
 
@@ -327,6 +339,36 @@ def mostrar_resumo(lead_id: str, *, recolhido: bool) -> None:
             st.caption(
                 f"⚓ {len(resumo['descartados'])} item(ns) descartado(s) por falta de lastro"
             )
+        _avaliar_resumo(lead_id, int(resumo["versao"]))
+
+
+def _avaliar_resumo(lead_id: str, versao: int) -> None:
+    """ "Útil / não útil" de quem atende (evento ResumoAvaliado → página Qualidade da IA)."""
+    chave = f"resumo_avaliado:{lead_id}:{versao}"
+    if st.session_state.get(chave):
+        st.caption(f"Obrigado pelo retorno ({st.session_state[chave]}).")
+        return
+    st.caption("Este resumo ajudou?")
+    util, nao_util, _ = st.columns([1, 1, 4])
+    escolha = None
+    if util.button("👍 Útil", key=f"{chave}:sim"):
+        escolha = True
+    if nao_util.button("👎 Não útil", key=f"{chave}:nao"):
+        escolha = False
+    if escolha is not None:
+        erro = api_post(
+            f"/leads/{lead_id}/resumo/avaliacao",
+            {
+                "util": escolha,
+                "versao": versao,
+                "responsavel": st.session_state.get("responsavel_nome") or None,
+            },
+        )
+        if erro:
+            st.error(f"Não foi possível registrar: {erro}")
+        else:
+            st.session_state[chave] = "útil" if escolha else "não útil"
+            st.rerun()
 
 
 def api_get(caminho: str, **params: Any) -> Any:

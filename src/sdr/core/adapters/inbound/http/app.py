@@ -19,6 +19,7 @@ from sdr.core.adapters.inbound.http.routers import (
     leads,
     lgpd,
     painel,
+    qualidade,
     whatsapp_meta,
     whatsapp_twilio,
 )
@@ -60,6 +61,7 @@ def criar_app(
     app.include_router(atendimentos.router, dependencies=admin)
     app.include_router(painel.router, dependencies=admin)
     app.include_router(lgpd.router, dependencies=admin)
+    app.include_router(qualidade.router, dependencies=admin)
     if not producao:
         app.include_router(demo.router, dependencies=admin)
     app.include_router(whatsapp_twilio.router)  # assinatura do provedor + rate limit

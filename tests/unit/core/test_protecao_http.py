@@ -72,6 +72,11 @@ async def test_rota_administrativa_exige_chave() -> None:
         ("POST", "/lgpd/leads/lead-1/anonimizacao"),
         ("POST", "/demo/leads/lead-1/simular-inatividade"),
         ("GET", "/leads/lead-1/resumo"),
+        ("GET", "/qualidade/online"),
+        ("GET", "/qualidade/offline"),
+        ("POST", "/qualidade/offline"),
+        ("GET", "/qualidade/versao"),
+        ("POST", "/leads/lead-1/resumo/avaliacao"),
     ],
 )
 async def test_todas_as_rotas_administrativas_sao_protegidas(metodo: str, caminho: str) -> None:

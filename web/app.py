@@ -25,6 +25,7 @@ paginas = {
         st.Page("paginas/fila.py", title="Fila de atendimento", icon="🧑‍💼"),
         st.Page("paginas/agenda.py", title="Agenda", icon="📅"),
         st.Page("paginas/followups.py", title="Follow-ups", icon="⏰"),
+        st.Page("paginas/qualidade.py", title="Qualidade da IA", icon="🧪"),
     ],
     "Demonstração": [st.Page("paginas/chat.py", title="Chat com a Lia", icon="💬")],
 }

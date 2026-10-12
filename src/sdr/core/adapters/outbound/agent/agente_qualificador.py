@@ -479,6 +479,8 @@ class AgenteQualificador:
         metadados: dict[str, object] = {
             "roteamento": final["roteamento"],
             "no_resposta": final["no_resposta"],
+            # Versão dos prompts do core: a página de Qualidade fatia as métricas por ela.
+            "prompts": VERSOES_PROMPTS,
         }
         if (acao := final["acao_atendimento"]) is not None:
             previsto = final["atendimento_previsto"]

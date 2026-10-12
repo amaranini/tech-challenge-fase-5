@@ -117,6 +117,15 @@ class Settings(BaseSettings):
     limite_ip_por_minuto: int = 60  # requisições por IP no chat público
     limite_ip_webhook_por_minuto: int = 600  # no webhook o IP é do provedor: só contra flood
 
+    # Qualidade da IA: preço do LLM em US$ por 1M tokens [entrada, saída] (prefixo do modelo)
+    custo_llm_por_milhao: dict[str, list[float]] = {
+        "gpt-4.1-mini": [0.40, 1.60],
+        "gpt-4.1-nano": [0.10, 0.40],
+        "gpt-4.1": [2.00, 8.00],
+        "gpt-4o-mini": [0.15, 0.60],
+        "gpt-4o": [2.50, 10.00],
+    }
+
     # CRM mock (Postgres + log JSON Lines). Produção: HubSpot ou outro CRM.
     crm_mock_log: str | None = "var/crm_mock.jsonl"
 

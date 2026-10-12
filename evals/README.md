@@ -82,6 +82,15 @@ rota não existe com `AMBIENTE=producao`.
   `EVAL_PRECOS='{"modelo": [entrada, saida]}'`). Não inclui o resumo de handoff, os
   follow-ups (fora do turno) nem o juiz.
 
+## Dashboard
+
+Ao fim de cada rodada completa (sem `-k`), o runner grava o resumo na API
+(`POST /qualidade/offline`, com a versão do agente avaliada em `GET /qualidade/versao`).
+A página **🧪 Qualidade da IA** mostra esse card ao lado das métricas online das
+conversas reais. Use `--nao-registrar` para não gravar. O runner também anonimiza cada
+lead de teste ao fim (`--manter` desliga), para a agenda mock não ficar ocupada pelas
+rodadas.
+
 ## Langfuse
 
 Com as chaves do Langfuse configuradas, cada cenário manda scores (`eval.cenario_ok`,

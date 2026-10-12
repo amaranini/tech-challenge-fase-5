@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -6,12 +6,17 @@ from fastapi import HTTPException, Request
 
 from sdr.core.adapters.inbound.http.protecao import ProtecaoHttp
 from sdr.core.application.consultas.painel import ConsultarPainel
+from sdr.core.application.consultas.qualidade import (
+    ConsultarQualidade,
+    RegistrarAvaliacaoOffline,
+)
 from sdr.core.application.use_cases.atendimento import (
     AssumirAtendimento,
     DevolverAtendimento,
     EnviarMensagemResponsavel,
     ListarAtendimentos,
 )
+from sdr.core.application.use_cases.avaliar_resumo import AvaliarResumo
 from sdr.core.application.use_cases.consultar_agenda_e_resumo import (
     ListarAgendamentos,
     ObterResumo,
@@ -57,6 +62,12 @@ class Dependencias:
     protecao: ProtecaoHttp = field(default_factory=ProtecaoHttp)
     exportar_dados_lead: Callable[[], ExportarDadosLead | None] = field(default=lambda: None)
     anonimizar_lead: Callable[[], AnonimizarLead | None] = field(default=lambda: None)
+    consultar_qualidade: Callable[[], ConsultarQualidade | None] = field(default=lambda: None)
+    registrar_avaliacao_offline: Callable[[], RegistrarAvaliacaoOffline | None] = field(
+        default=lambda: None
+    )
+    avaliar_resumo: Callable[[], AvaliarResumo | None] = field(default=lambda: None)
+    versao_agente: Mapping[str, object] = field(default_factory=dict)
 
 
 def obter_consultar_painel(request: Request) -> ConsultarPainel:
