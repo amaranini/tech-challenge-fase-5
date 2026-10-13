@@ -325,7 +325,6 @@ def main() -> None:
         for erro in resultado.erros:
             print(f"    - {erro}", flush=True)
         resultados.append(resultado)
-    api.fechar()
     contexto = {
         "inicio": inicio.isoformat(timespec="seconds"),
         "api": api.url,
@@ -348,6 +347,7 @@ def main() -> None:
     print(f"\nRelatório: {args.saida}")
     if not args.nao_registrar and not args.filtro:
         _registrar_na_api(api, resultados, contexto, inicio)
+    api.fechar()
 
 
 if __name__ == "__main__":

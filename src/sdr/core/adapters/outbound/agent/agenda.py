@@ -274,8 +274,18 @@ class _Redacao:
         feito = "AGENDADO" if decisao.tipo is TipoDecisao.AGENDADO else "REMARCADO"
         return [
             f"{feito} com sucesso: {self.agendamento(ag)}. Confirme ao lead com esses dados e "
-            f"diga que {ag.responsavel.nome} vai atendê-lo. Não faça mais perguntas sobre a "
-            "agenda."
+            f"diga que {ag.responsavel.nome} vai atendê-lo.",
+            *self.sem_oferta_extra(),
+        ]
+
+    @staticmethod
+    def sem_oferta_extra() -> list[str]:
+        # "Quer que eu te envie o endereço certinho?" → "sim" virou nova confirmação de
+        # horário (visto em produção): depois de agendar, nada de oferecer o que não faz.
+        return [
+            "Termine SEM pergunta. NÃO ofereça enviar endereço, lembrete, fotos ou qualquer "
+            "outra coisa: o que não está nos dados do agendamento (ex.: endereço exato) quem "
+            "passa é a pessoa responsável."
         ]
 
     def manter(self, decisao: Decisao) -> list[str]:
@@ -285,6 +295,13 @@ class _Redacao:
                 "O lead pediu para cancelar, mas não há agendamento ativo: diga isso com "
                 "naturalidade."
             )
+        if decisao.aviso is Aviso.JA_AGENDADO and self.r.agendamento is not None:
+            return [
+                "O horário que o lead indicou é o que JÁ está agendado: "
+                f"{self.agendamento(self.r.agendamento)}. Reafirme que está mantido, sem "
+                "oferecer outros horários e sem dizer que não há vaga.",
+                *self.sem_oferta_extra(),
+            ]
         if self.r.agendamento is not None:
             linhas += [
                 f"Já está agendado: {self.agendamento(self.r.agendamento)}. Responda ao lead; "

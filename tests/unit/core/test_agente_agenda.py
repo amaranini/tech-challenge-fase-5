@@ -136,15 +136,29 @@ async def test_quinta_a_tarde_pede_confirmacao_e_sim_reserva() -> None:
     assert proposta.agenda.proposta is not None
 
     c2 = Cenario([interpretacao("confirmar")], agenda=c.agenda)
-    feito = await c2.grafo.responder(
-        EntradaAgente(lead(FICHA_COMPLETA, proposta.agenda), [], "sim")
-    )
+    confirmando = lead(FICHA_COMPLETA, proposta.agenda)
+    feito = await c2.grafo.responder(EntradaAgente(confirmando, [], "sim"))
 
     assert [e.tipo for e in feito.eventos if e.tipo.name.startswith("AGENDAMENTO")] == [
         TipoEvento.AGENDAMENTO_CRIADO
     ]
     assert "AGENDADO com sucesso" in c2.bloco()
+    assert "Termine SEM pergunta. NÃO ofereça enviar endereço" in c2.bloco()
     assert feito.agenda == NegociacaoAgenda()
+
+    # "sim" a outra pergunta, com o LLM repetindo o horário já reservado (produção):
+    # mantém o agendamento em vez de dizer que o horário "já não tem mais".
+    quinta_14h = {"dias_semana": ["quinta"], "hora": 14}
+    c3 = Cenario([interpretacao("confirmar", preferencia=quinta_14h)], agenda=c.agenda)
+    de_novo = await c3.grafo.responder(
+        EntradaAgente(replace(confirmando, agenda=feito.agenda), [], "sim, por favor")
+    )
+
+    assert de_novo.metadados["agenda"]["decisao"] == "manter"  # type: ignore[index]
+    assert de_novo.metadados["agenda"]["aviso"] == "ja_agendado"  # type: ignore[index]
+    assert len(c.agenda.chamadas) == 1  # só a reserva do turno anterior
+    assert "JÁ está agendado: aula experimental, quinta (08/10) às 14h" in c3.bloco()
+    assert "sem dizer que não há vaga" in c3.bloco()
 
 
 async def test_lead_que_nao_quer_agendar_volta_ao_especialista_sem_insistir() -> None:
