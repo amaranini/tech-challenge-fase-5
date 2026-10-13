@@ -323,6 +323,7 @@ class Aviso(StrEnum):
     FALTA_MODALIDADE = "falta_modalidade"
     PROPOSTA_RECUSADA = "proposta_recusada"
     SEM_AGENDAMENTO = "sem_agendamento"
+    JA_AGENDADO = "ja_agendado"  # indicou o horário que já é dele
     LEMBRETE = "lembrete"
 
 
@@ -468,9 +469,29 @@ class _Negociacao:
             AcaoAgenda.PEDIR_HORARIOS,
         )
 
+    @property
+    def indicou_o_agendado(self) -> bool:
+        """O horário indicado é o do agendamento ativo — ex.: "sim" depois de agendar, com o
+        LLM repetindo a preferência já atendida (visto em produção). O slot do lead não está
+        entre os livres: sem esta checagem virava "às 18h já não tem mais"."""
+        ativo = self.ativo
+        if ativo is None:
+            return False
+        i = self.interpretacao
+        ofertados = self.negociacao.ofertados
+        if i.opcao is not None and 1 <= i.opcao <= len(ofertados):
+            return ofertados[i.opcao - 1].id == ativo.slot_id
+        pref = i.preferencia
+        if pref.vazia or not pref.atende(ativo.inicio.astimezone(self.fuso), self.hoje):
+            return False
+        # Só o dia ("quero mudar para quinta") com remarcação ainda pode ser outro horário.
+        return self.acao is AcaoAgenda.CONFIRMAR or pref.hora is not None
+
     def propor_horario(self) -> Decisao:
         """O lead indicou um horário: propõe o melhor slot real (ou alternativas)."""
         ativo = self.ativo
+        if self.indicou_o_agendado:
+            return Decisao(TipoDecisao.MANTER, NegociacaoAgenda(), aviso=Aviso.JA_AGENDADO)
         escolhido = _escolher(
             self.interpretacao, self.negociacao.ofertados, self.livres, self.fuso, self.hoje
         )

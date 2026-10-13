@@ -314,3 +314,37 @@ def test_sim_pode_cancelar_com_cancelamento_pendente_confirma() -> None:
     assert sim_cancela.proposta is not None
     assert sim_cancela.proposta.operacao is Operacao.CANCELAR
     assert sim_cancela.proposta.agendamento_id == ativo.id
+
+
+def test_sim_depois_de_agendar_com_o_horario_marcado_mantem_e_nao_diz_que_lotou() -> None:
+    """Produção: "sim" a uma pergunta depois de agendar virou CONFIRMAR com a preferência
+    do horário já reservado; o slot do lead não está entre os livres ⇒ "já não tem mais"."""
+    slot = next(s for s in LIVRES if local(s).date() == QUINTA and local(s).hour == 18)
+    ativo = agendamento_em(slot)
+    livres = [s for s in LIVRES if s.id != slot.id]
+    quinta_18h = PreferenciaHorario(dias_semana=(3,), hora=18)
+    for acao in (AcaoAgenda.CONFIRMAR, AcaoAgenda.PREFERENCIA, AcaoAgenda.REMARCAR):
+        decisao = passo(interp(acao, preferencia=quinta_18h), ativo=ativo, livres=livres)
+        assert decisao.tipo is TipoDecisao.MANTER, acao
+        assert decisao.aviso is Aviso.JA_AGENDADO
+        assert decisao.negociacao == NegociacaoAgenda()
+
+    so_quinta = PreferenciaHorario(dias_semana=(3,))
+    sim = passo(interp(AcaoAgenda.CONFIRMAR, preferencia=so_quinta), ativo=ativo, livres=livres)
+    assert sim.aviso is Aviso.JA_AGENDADO
+
+
+def test_remarcar_para_outro_horario_do_mesmo_dia_ainda_propoe() -> None:
+    slot = next(s for s in LIVRES if local(s).date() == QUINTA and local(s).hour == 18)
+    livres = [s for s in LIVRES if s.id != slot.id]
+    decisao = passo(
+        interp(AcaoAgenda.REMARCAR, preferencia=PreferenciaHorario(dias_semana=(3,))),
+        ativo=agendamento_em(slot),
+        livres=livres,
+    )
+    assert decisao.tipo is TipoDecisao.PEDIR_CONFIRMACAO
+    assert decisao.proposta is not None
+    assert decisao.proposta.operacao is Operacao.REMARCAR
+    assert decisao.proposta.slot is not None
+    assert local(decisao.proposta.slot).date() == QUINTA
+    assert decisao.proposta.slot.id != slot.id
