@@ -8,22 +8,24 @@ ou investir), mostra **imóveis reais da base**, qualifica o lead, **agenda a vi
 corretor certo, passa o caso para uma pessoa quando preciso e faz **follow-up**, tudo com
 dashboard, observabilidade, guardrails e avaliação.
 
+> 🎥 **Vídeo (pitch técnico + demonstração funcional):** https://youtu.be/rHJ4ka8Vxtw
+
 - **No ar:** dashboard em https://web-production-a6acc.up.railway.app · API em
   https://api-production-e5c4.up.railway.app/health
+- **WhatsApp da Lia:** **+55 11 5296-2040** — mande um "oi" e converse com ela.
 
 ### Acesso para avaliação
 
-| | |
-|---|---|
-| Dashboard | https://web-production-a6acc.up.railway.app |
-| Usuário | `avaliador` |
-| Senha | `fiap-7377b451` |
+Dashboard: https://web-production-a6acc.up.railway.app
 
-O usuário de avaliação é **somente leitura**: vê todas as páginas (visão geral, leads com
-conversa, ficha, score e resumo, fila, agenda, follow-ups, qualidade da IA), mas não
-assume, não responde e não devolve atendimentos. Telefones, e-mails e CPFs aparecem
-mascarados. Para conversar com a Lia, use **Demonstração → Chat com a Lia → ➕ Novo
-lead**, ou rode o projeto localmente com o seu próprio usuário (abaixo).
+| Perfil | Usuário | Senha | O que pode fazer |
+|---|---|---|---|
+| Equipe | `equipe` | `lia-bbff326bc266` | tudo: assumir, responder e devolver atendimentos na Fila, conversar no chat, simular inatividade |
+| Somente leitura | `avaliador` | `fiap-7377b451` | vê todas as páginas, com telefones, e-mails e CPFs mascarados; não age |
+
+O ambiente é de **demonstração**: não há leads reais, só dados sintéticos e as conversas
+de teste. Para conversar com a Lia, mande mensagem no WhatsApp acima ou use
+**Demonstração → Chat com a Lia → ➕ Novo lead** no dashboard.
 
 ## Sumário
 
